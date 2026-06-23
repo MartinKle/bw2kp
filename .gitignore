@@ -1,0 +1,18 @@
+# Compiled output
+/VaultwardenSync.dll
+/VaultwardenSync.plgx
+
+# Temporary files
+plgx_temp/
+kp_err.txt
+kp_out.txt
+kp-src.zip
+test_log.txt
+items_dump.json
+orgs_dump.json
+
+# Visual Studio / MSBuild
+.vs/
+obj/
+bin/
+*.user
