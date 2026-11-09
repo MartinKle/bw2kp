@@ -9,11 +9,11 @@ This document outlines the design, architecture, and implementation strategies f
 KeePass 2.x plugins are developed as .NET Framework class libraries (`.dll`) or compiled on-the-fly source packages (`.plgx`). They extend the base `KeePass.Plugins.Plugin` class and interact with the KeePass application via the `IPluginHost` interface.
 
 ### Planned Source Files
-*   **[VaultwardenSyncExt.cs](file:///C:/Users/MartinKlebermass/OneDrive - retego.ch/dev/bw2keepass/src/VaultwardenSyncExt.cs)**: The main entry point of the plugin, responsible for initialization, hook cleanup, and adding UI elements (e.g., menu items).
-*   **[SyncConfiguration.cs](file:///C:/Users/MartinKlebermass/OneDrive - retego.ch/dev/bw2keepass/src/SyncConfiguration.cs)**: Class responsible for storing and retrieving configuration settings (URL, Email, Target Group, Sync Preferences) securely using KeePass's `CustomConfig` and Windows DPAPI.
-*   **[SyncEngine.cs](file:///C:/Users/MartinKlebermass/OneDrive - retego.ch/dev/bw2keepass/src/SyncEngine.cs)**: Core logic for retrieving items from Vaultwarden, mapping data structures, merging entries, and updating the KeePass database.
-*   **[CryptoService.cs](file:///C:/Users/MartinKlebermass/OneDrive - retego.ch/dev/bw2keepass/src/CryptoService.cs)**: Handles decryption of Vaultwarden ciphers (only required if using the Direct API approach).
-*   **[SyncDialog.cs](file:///C:/Users/MartinKlebermass/OneDrive - retego.ch/dev/bw2keepass/src/SyncDialog.cs)**: Windows Forms dialog for credential entry, server settings, and starting the sync process.
+*   **[VaultwardenSyncExt.cs](../src/VaultwardenSyncExt.cs)**: The main entry point of the plugin, responsible for initialization, hook cleanup, and adding UI elements (e.g., menu items).
+*   **[SyncConfiguration.cs](../src/SyncConfiguration.cs)**: Class responsible for storing and retrieving configuration settings (URL, Email, Target Group, Sync Preferences) securely using KeePass's `CustomConfig` and Windows DPAPI.
+*   **[SyncEngine.cs](../src/SyncEngine.cs)**: Core logic for retrieving items from Vaultwarden, mapping data structures, merging entries, and updating the KeePass database.
+*   **[CryptoService.cs](../src/CryptoService.cs)**: Handles decryption of Vaultwarden ciphers (only required if using the Direct API approach).
+*   **[SyncDialog.cs](../src/SyncDialog.cs)**: Windows Forms dialog for credential entry, server settings, and starting the sync process.
 
 ```mermaid
 graph TD
