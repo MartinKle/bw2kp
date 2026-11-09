@@ -39,15 +39,19 @@ namespace VaultwardenSync
 
             using (var dialog = new SyncDialog(config, m_host.Database))
             {
-                DialogResult result = dialog.ShowDialog();
+                dialog.ShowDialog(m_host.MainWindow);
 
-                if (result == DialogResult.OK)
+                if (dialog.DatabaseModified)
                 {
                     // Refresh the KeePass UI to show synced entries and new groups
                     m_host.MainWindow.UpdateUI(false, null, true, null, true, null, true);
 
-                    // Save the database automatically
-                    m_host.MainWindow.SaveDatabase(m_host.Database, null);
+                    // Save automatically, but only after a complete sync. After a failed
+                    // sync the user decides whether to keep the partial changes.
+                    if (dialog.SyncSucceeded)
+                    {
+                        m_host.MainWindow.SaveDatabase(m_host.Database, null);
+                    }
                 }
             }
         }

@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Drawing;
 using System.Threading;
 using System.Windows.Forms;
+using KeePass.UI;
 using KeePassLib;
 
 namespace VaultwardenSync
@@ -14,6 +15,14 @@ namespace VaultwardenSync
 
         private BackgroundWorker _worker;
         private string _syncPassword;
+        private SyncEngine _engine;
+        private bool _busy;
+
+        /// <summary>True if the sync (or saving the settings) changed the database.</summary>
+        public bool DatabaseModified { get; private set; }
+
+        /// <summary>True if a sync ran to completion.</summary>
+        public bool SyncSucceeded { get; private set; }
 
         private Label lblServerUrl;
         private TextBox txtServerUrl;
@@ -185,6 +194,32 @@ namespace VaultwardenSync
             }
         }
 
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+
+            // Tell KeePass that a dialog is open, so it does not auto-lock the workspace
+            // or run global auto-type while the sync is working on the database.
+            GlobalWindowManager.AddWindow(this);
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            // The dialog must stay open until the running sync has finished cleanly
+            if (_busy)
+            {
+                e.Cancel = true;
+                return;
+            }
+            base.OnFormClosing(e);
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            GlobalWindowManager.RemoveWindow(this);
+            base.OnFormClosed(e);
+        }
+
         private void SaveConfigValues()
         {
             _config.ServerUrl = txtServerUrl.Text.Trim();
@@ -206,7 +241,10 @@ namespace VaultwardenSync
 
             if (chkSaveConfig.Checked)
             {
-                _config.Save();
+                if (_config.Save())
+                {
+                    DatabaseModified = true;
+                }
             }
         }
 
@@ -227,9 +265,11 @@ namespace VaultwardenSync
         private void BtnSync_Click(object sender, EventArgs e)
         {
             // Validation
-            if (string.IsNullOrEmpty(txtServerUrl.Text))
+            if (_busy) return;
+
+            if (!SyncConfiguration.IsValidServerUrl(txtServerUrl.Text.Trim()))
             {
-                MessageBox.Show("Please enter the Vaultwarden Server URL.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Please enter the Vaultwarden Server URL as a full address, e.g. https://vault.example.com.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -243,9 +283,9 @@ namespace VaultwardenSync
             }
             else
             {
-                if (string.IsNullOrEmpty(txtEmail.Text))
+                if (!SyncConfiguration.IsValidEmail(txtEmail.Text.Trim()))
                 {
-                    MessageBox.Show("Please enter your Vaultwarden Email.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show("Please enter a valid Vaultwarden Email address.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
             }
@@ -268,7 +308,11 @@ namespace VaultwardenSync
             // Store password for the background worker to access
             _syncPassword = txtMasterPassword.Text;
 
-            // Disable UI during sync
+            _engine = new SyncEngine(_config, _database);
+            _engine.OnLogMessage += PostLog;
+
+            // Disable UI during sync and keep the dialog open until it has finished
+            _busy = true;
             ToggleUi(false);
             txtLog.Clear();
 
@@ -276,23 +320,34 @@ namespace VaultwardenSync
             _worker.RunWorkerAsync();
         }
 
-        private void Worker_DoWork(object sender, DoWorkEventArgs e)
+        private void PostLog(string message)
         {
-            var engine = new SyncEngine(_config, _database);
-            engine.OnLogMessage += delegate(string message)
+            // Called from the background worker as well as from the UI thread.
+            // BeginInvoke does not block the worker, so it cannot deadlock with the UI.
+            try
             {
-                // Ensure cross-thread execution safe log output
-                if (txtLog.InvokeRequired)
+                if (IsDisposed || !IsHandleCreated) return;
+
+                if (InvokeRequired)
                 {
-                    txtLog.Invoke(new Action<string>(AppendLog), message);
+                    BeginInvoke(new Action<string>(AppendLog), message);
                 }
                 else
                 {
                     AppendLog(message);
                 }
-            };
+            }
+            catch (Exception)
+            {
+                // A log line is never worth failing the sync for
+            }
+        }
 
-            engine.Synchronize(_syncPassword);
+        private void Worker_DoWork(object sender, DoWorkEventArgs e)
+        {
+            // Background thread: only the slow Bitwarden CLI calls run here.
+            // The KeePass database is not touched.
+            e.Result = _engine.FetchVaultData(_syncPassword);
         }
 
         private void Worker_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
@@ -300,19 +355,49 @@ namespace VaultwardenSync
             // Clear the stored password
             _syncPassword = null;
 
-            if (e.Error != null)
+            Exception error = e.Error;
+            SyncResult result = null;
+
+            if (error == null)
             {
-                AppendLog("ERROR: " + e.Error.Message);
-                MessageBox.Show("Synchronization failed:\n" + e.Error.Message, "Sync Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            else
-            {
-                MessageBox.Show("Vaultwarden synchronization completed successfully!", "Sync Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                this.DialogResult = DialogResult.OK;
-                this.Close();
+                // UI thread: the database is only modified here, never concurrently with KeePass
+                try
+                {
+                    result = _engine.ApplyToDatabase((VaultData)e.Result);
+                    if (result.DatabaseModified)
+                    {
+                        DatabaseModified = true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    error = ex;
+                    // The update may have stopped half-way
+                    DatabaseModified = true;
+                }
             }
 
+            _engine = null;
+            _busy = false;
             ToggleUi(true);
+
+            if (error != null)
+            {
+                AppendLog("ERROR: " + error.Message);
+                MessageBox.Show("Synchronization failed:\n" + error.Message, "Sync Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            SyncSucceeded = true;
+            txtMasterPassword.Clear();
+
+            MessageBox.Show(
+                string.Format(
+                    "Vaultwarden synchronization completed successfully!\n\n{0} added, {1} updated, {2} moved, {3} removed, {4} unchanged, {5} skipped (unsupported type).",
+                    result.Added, result.Updated, result.Moved, result.Removed, result.Unchanged, result.Skipped),
+                "Sync Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            this.DialogResult = DialogResult.OK;
+            this.Close();
         }
 
         private void AppendLog(string message)

@@ -11,6 +11,7 @@ namespace VaultwardenSync
         private readonly PwDatabase _database;
 
         public const string ConfigEntryTitle = "Vaultwarden Sync Configuration";
+        private const string CliPathConfigKey = "VaultwardenSync.CliPath";
 
         public string ServerUrl { get; set; }
         public string Email { get; set; }
@@ -58,6 +59,22 @@ namespace VaultwardenSync
             return null;
         }
 
+        public static bool IsValidServerUrl(string url)
+        {
+            Uri uri;
+            if (string.IsNullOrEmpty(url)) return false;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out uri)) return false;
+            return uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp;
+        }
+
+        public static bool IsValidEmail(string email)
+        {
+            if (string.IsNullOrEmpty(email)) return false;
+            // A leading dash would be read as a command line option by the CLI
+            if (email.StartsWith("-")) return false;
+            return email.IndexOf('@') > 0 && email.IndexOf(' ') < 0;
+        }
+
         public void Load()
         {
             PwEntry entry = FindConfigEntry();
@@ -68,33 +85,58 @@ namespace VaultwardenSync
                 ClientId = ReadString(entry, "ClientId", ClientId);
                 ClientSecret = ReadString(entry, "ClientSecret", ClientSecret);
                 TargetGroupName = ReadString(entry, "TargetGroupName", TargetGroupName);
-                CliPath = ReadString(entry, "CliPath", CliPath);
             }
+
+            // The CLI path is machine-specific and decides which executable receives the
+            // master password. It is therefore kept in the local KeePass configuration and
+            // deliberately not read from the database, which may come from somewhere else.
+            CliPath = _host.CustomConfig.GetString(CliPathConfigKey, CliPath);
         }
 
-        public void Save()
+        /// <summary>
+        /// Stores the settings. Returns true if the database was changed by this.
+        /// </summary>
+        public bool Save()
         {
+            _host.CustomConfig.SetString(CliPathConfigKey, CliPath ?? string.Empty);
+
             PwEntry entry = FindConfigEntry();
             bool isNew = false;
+            bool changed = false;
             if (entry == null)
             {
                 entry = new PwEntry(true, true);
                 entry.Strings.Set(PwDefs.TitleField, new ProtectedString(false, ConfigEntryTitle));
                 _database.RootGroup.AddEntry(entry, true);
                 isNew = true;
+                changed = true;
             }
 
-            WriteString(entry, "ServerUrl", ServerUrl, false);
-            WriteString(entry, "Email", Email, false);
-            WriteString(entry, "ClientId", ClientId, false);
-            WriteString(entry, "ClientSecret", ClientSecret, true);
-            WriteString(entry, "TargetGroupName", TargetGroupName, false);
-            WriteString(entry, "CliPath", CliPath, false);
+            changed |= WriteString(entry, "ServerUrl", ServerUrl, false);
+            changed |= WriteString(entry, "Email", Email, false);
+            changed |= WriteString(entry, "ClientId", ClientId, false);
+            changed |= WriteString(entry, "ClientSecret", ClientSecret, true);
+            changed |= WriteString(entry, "TargetGroupName", TargetGroupName, false);
 
-            entry.Touch(true, false);
-            
-            // Mark the database as modified so the user can save it
-            _host.MainWindow.UpdateUI(false, null, false, null, true, null, true);
+            // Older versions stored the CLI path in the database
+            if (entry.Strings.Get("CliPath") != null)
+            {
+                entry.Strings.Remove("CliPath");
+                changed = true;
+            }
+
+            if (changed)
+            {
+                if (!isNew)
+                {
+                    entry.Touch(true, false);
+                }
+
+                // Mark the database as modified so the user can save it
+                _host.MainWindow.UpdateUI(false, null, false, null, true, null, true);
+            }
+
+            return changed;
         }
 
         private string ReadString(PwEntry entry, string fieldName, string defaultValue)
@@ -107,10 +149,18 @@ namespace VaultwardenSync
             return defaultValue;
         }
 
-        private void WriteString(PwEntry entry, string fieldName, string value, bool protect)
+        private bool WriteString(PwEntry entry, string fieldName, string value, bool protect)
         {
             if (value == null) value = string.Empty;
+
+            var current = entry.Strings.Get(fieldName);
+            if (current != null && current.IsProtected == protect && current.ReadString() == value)
+            {
+                return false;
+            }
+
             entry.Strings.Set(fieldName, new ProtectedString(protect, value));
+            return true;
         }
     }
 }

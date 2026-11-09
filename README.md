@@ -32,14 +32,27 @@ A lightweight KeePass 2.x plugin that enables one-way synchronization from Vault
      - *To get your API Keys:* Go to your Vaultwarden Web Vault → Settings → Security → Keys → View API Key.
    - **Master Password:** Your Vaultwarden master password (used only in memory to decrypt the vault; never saved to disk).
    - **Target Group:** The name of the root group in KeePass where synced items will be placed (default: `Vaultwarden Sync`).
-   - **Bitwarden CLI Path:** The path to `bw.exe`.
+   - **Bitwarden CLI Path:** The full path to `bw.exe`, or just `bw.exe` if it is on your `PATH`.
 4. Leave **"Remember Configuration settings"** checked to save your configuration into the KeePass database securely.
 5. Click **Synchronize**.
 
 The sync runs in the background. Once it finishes, your KeePass left-pane will instantly update with the newly imported folders, organizations, and passwords.
 
+## How the sync treats your entries
+- **Only real changes are written.** An entry is updated only if something differs from Vaultwarden. Before an update, the previous state (for example the old password) is kept in the KeePass entry history.
+- **Your own fields are kept.** The plugin remembers which custom fields it created and only removes those. Fields added by you or by other plugins stay.
+- **No overwriting of standard fields.** A Vaultwarden custom field named like a KeePass field (`Password`, `Notes`, ...) is stored as `Password (VW)` instead.
+- **Deleted items go to the Recycle Bin.** If Vaultwarden unexpectedly returns no items at all, nothing is removed.
+- **Not synced:** cards, identities, SSH keys, passkeys, attachments and additional URIs. The plugin is a readable copy, not a full backup; use `bw export` for that.
+
 ## How it stores Configuration
-The plugin stores your settings in the root of your KeePass database under an entry titled **Vaultwarden Sync Configuration**. Your `ClientSecret` is protected natively by KeePass database encryption. Because settings are stored directly in your `.kdbx` file, they will travel with your database across machines!
+The plugin stores your settings in the root of your KeePass database under an entry titled **Vaultwarden Sync Configuration**. Your `ClientSecret` is protected natively by KeePass database encryption. Because these settings are stored directly in your `.kdbx` file, they will travel with your database across machines!
+
+The **Bitwarden CLI path** is the exception: it is stored in the local KeePass configuration of each computer, because it decides which program receives your master password.
+
+The plugin runs the Bitwarden CLI with its own profile in `%APPDATA%\VaultwardenSync\bw-cli` and logs out again after every sync. Your own `bw` login and server setting are not touched.
+
+If you log in with Email/Password and your account uses two-step login, the sync stops with an error instead of waiting for a code. Use API Keys in that case.
 
 ## Compiling from Source
 If you wish to build the plugin yourself:
@@ -52,5 +65,6 @@ If you wish to build the plugin yourself:
 This project is licensed under the GNU General Public License v3.0 (GPLv3). See the [LICENSE](LICENSE) file for details.
 
 ## Version History
+- **v0.3.0**: Session key no longer passed on the command line, UTF-8 CLI output, entry history and change detection, custom-field collision handling, Recycle Bin fix, CLI timeout, database updates on the UI thread, separate CLI profile, CLI path stored per computer.
 - **v0.2.0**: Added automatic organization segregation, native DB config storage, deadlock fix, and auto-save.
 - **v0.1.0**: Initial skeleton and build framework.
