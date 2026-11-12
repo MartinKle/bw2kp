@@ -16,3 +16,7 @@ orgs_dump.json
 obj/
 bin/
 *.user
+
+# Encrypted vault snapshots must never be committed
+vaultwarden-snapshot-*.json
+backup.log
