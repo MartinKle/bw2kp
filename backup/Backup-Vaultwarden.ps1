@@ -150,12 +150,16 @@ function Invoke-Http {
 function Get-ErrorHint {
     # Short, secret-free hint from an error response of the server
     param([string]$Text)
-    if ([string]::IsNullOrEmpty($Text)) { return '' }
-    $m = [regex]::Match($Text, '"error_description"\s*:\s*"((?:[^"\\]|\\.)*)"')
-    if ($m.Success) { return $m.Groups[1].Value }
-    $m = [regex]::Match($Text, '"message"\s*:\s*"((?:[^"\\]|\\.)*)"')
-    if ($m.Success) { return $m.Groups[1].Value }
-    return ''
+    if ([string]::IsNullOrEmpty($Text)) { return '(empty response body)' }
+    $ignoreCase = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+    foreach ($name in @('error_description', 'Message', 'error')) {
+        $m = [regex]::Match($Text, ('"' + $name + '"\s*:\s*"((?:[^"\\]|\\.)*)"'), $ignoreCase)
+        if ($m.Success -and $m.Groups[1].Value) { return ($name + ': ' + $m.Groups[1].Value) }
+    }
+    # Unknown format (for example an HTML page of a proxy): show the start of it
+    $flat = ($Text -replace '\s+', ' ')
+    if ($flat.Length -gt 300) { $flat = $flat.Substring(0, 300) + '...' }
+    return ('Response: ' + $flat)
 }
 
 function Get-JsonValue {
