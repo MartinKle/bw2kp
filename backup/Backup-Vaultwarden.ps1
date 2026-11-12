@@ -166,7 +166,10 @@ function Get-JsonValue {
     param($Dictionary, [string[]]$Names)
     if ($null -eq $Dictionary) { return $null }
     foreach ($n in $Names) {
-        if ($Dictionary.ContainsKey($n)) { return $Dictionary[$n] }
+        # The leading comma keeps arrays intact. Without it PowerShell unrolls the
+        # array on return: an empty list becomes $null and a list with a single
+        # element becomes that element itself.
+        if ($Dictionary.ContainsKey($n)) { return , $Dictionary[$n] }
     }
     return $null
 }
