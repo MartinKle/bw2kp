@@ -356,11 +356,24 @@ namespace VaultwardenSync
             }
 
             RSAParameters parameters = ParsePkcs8RsaPrivateKey(pkcs8PrivateKey);
-            using (RSACryptoServiceProvider rsa = new RSACryptoServiceProvider())
+            try
             {
-                rsa.PersistKeyInCsp = false;
-                rsa.ImportParameters(parameters);
-                return rsa.Decrypt(e.Data, true); // true = OAEP (SHA-1)
+                using (RSACryptoServiceProvider rsa = new RSACryptoServiceProvider())
+                {
+                    rsa.PersistKeyInCsp = false;
+                    rsa.ImportParameters(parameters);
+                    return rsa.Decrypt(e.Data, true); // true = OAEP (SHA-1)
+                }
+            }
+            finally
+            {
+                // Do not leave the private key parts in memory
+                ClearBytes(parameters.D);
+                ClearBytes(parameters.P);
+                ClearBytes(parameters.Q);
+                ClearBytes(parameters.DP);
+                ClearBytes(parameters.DQ);
+                ClearBytes(parameters.InverseQ);
             }
         }
 
@@ -398,6 +411,11 @@ namespace VaultwardenSync
             result.DQ = PadLeft(TrimLeadingZeros(dq), half);
             result.InverseQ = PadLeft(TrimLeadingZeros(inverseQ), half);
             return result;
+        }
+
+        private static void ClearBytes(byte[] value)
+        {
+            if (value != null) Array.Clear(value, 0, value.Length);
         }
 
         private static int ReadLength(byte[] data, ref int pos)

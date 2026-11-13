@@ -83,6 +83,8 @@ namespace VaultwardenSync
     public class SnapProfile
     {
         [DataMember]
+        public string id { get; set; }
+        [DataMember]
         public string email { get; set; }
         [DataMember]
         public string key { get; set; }
@@ -342,6 +344,10 @@ namespace VaultwardenSync
                 Log("Master password accepted.");
 
                 VaultData data = new VaultData();
+                data.AccountId = profile.id;
+                data.AccountEmail = !string.IsNullOrEmpty(profile.email) ? profile.email : doc.email;
+                data.Server = doc.server;
+                data.SnapshotCreatedUtc = doc.createdUtc;
 
                 // Organization keys (RSA, protected by the user's private key)
                 if (profile.organizations != null)

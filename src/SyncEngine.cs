@@ -19,6 +19,31 @@ namespace VaultwardenSync
         public List<BwFolder> Folders = new List<BwFolder>();
         public List<BwCipher> Ciphers = new List<BwCipher>();
         public List<BwOrganization> Organizations = new List<BwOrganization>();
+
+        // Where the data comes from. Only filled when a snapshot is imported.
+        public string AccountId;
+        public string AccountEmail;
+        public string Server;
+        public string SnapshotCreatedUtc; // "yyyy-MM-ddTHH:mm:ssZ"
+    }
+
+    /// <summary>
+    /// What an import would change, worked out without touching the database.
+    /// </summary>
+    public class ImportPreview
+    {
+        public bool TargetGroupExists;
+        public int ExistingEntries;
+        public int Added;
+        public int Updated;
+        public int Unchanged;
+        public int Removed;
+        public int Skipped;
+        public bool RemovalSuppressed; // no importable items at all: nothing would be removed
+        public List<string> UpdatedTitles = new List<string>();
+        public List<string> RemovedTitles = new List<string>();
+        public string StoredAccountId;      // account of the previous imports into this group
+        public string LastSnapshotUtc;      // creation time of the newest snapshot imported so far
     }
 
     /// <summary>
@@ -46,6 +71,9 @@ namespace VaultwardenSync
         // Entry custom data key that remembers which custom fields this plugin wrote,
         // so that fields added by the user or by other plugins are left alone.
         private const string TrackedFieldsKey = "VaultwardenSync.Fields";
+        // Custom data of the target group: which account it mirrors and how recent the data is
+        private const string AccountIdKey = "VaultwardenSync.AccountId";
+        private const string LastSnapshotKey = "VaultwardenSync.LastSnapshotUtc";
 
         private readonly SyncConfiguration _config;
         private readonly PwDatabase _database;
@@ -193,6 +221,82 @@ namespace VaultwardenSync
         }
 
         /// <summary>
+        /// Works out what ApplyToDatabase would do, without changing the database.
+        /// Entries that only move to another group are counted as unchanged.
+        /// Must be called on the KeePass UI thread.
+        /// </summary>
+        public ImportPreview Preview(VaultData data)
+        {
+            if (data == null) throw new ArgumentNullException("data");
+
+            var preview = new ImportPreview();
+            var entryIndex = new Dictionary<string, PwEntry>();
+
+            PwGroup targetRoot = FindSubGroup(_database.RootGroup, _config.TargetGroupName);
+            if (targetRoot != null)
+            {
+                preview.TargetGroupExists = true;
+                preview.StoredAccountId = targetRoot.CustomData.Get(AccountIdKey);
+                preview.LastSnapshotUtc = targetRoot.CustomData.Get(LastSnapshotKey);
+                IndexEntries(targetRoot, entryIndex);
+            }
+            preview.ExistingEntries = entryIndex.Count;
+
+            var activeVwIds = new HashSet<string>();
+            foreach (var cipher in data.Ciphers)
+            {
+                if (cipher == null || string.IsNullOrEmpty(cipher.id)) continue;
+
+                if (cipher.type != 1 && cipher.type != 2)
+                {
+                    preview.Skipped++;
+                    continue;
+                }
+                activeVwIds.Add(cipher.id);
+
+                PwEntry entry;
+                if (!entryIndex.TryGetValue(cipher.id, out entry))
+                {
+                    preview.Added++;
+                    continue;
+                }
+
+                var desired = new Dictionary<string, ProtectedString>();
+                var obsolete = new List<string>();
+                string trackedFields = BuildDesiredStrings(cipher, entry, desired, obsolete);
+                if (NeedsUpdate(entry, desired, obsolete, trackedFields))
+                {
+                    preview.Updated++;
+                    preview.UpdatedTitles.Add(entry.Strings.ReadSafe(PwDefs.TitleField));
+                }
+                else
+                {
+                    preview.Unchanged++;
+                }
+            }
+
+            if (targetRoot != null)
+            {
+                var entriesToDelete = new List<PwEntry>();
+                FindDeletions(targetRoot, activeVwIds, entriesToDelete);
+                if (entriesToDelete.Count > 0 && activeVwIds.Count == 0)
+                {
+                    preview.RemovalSuppressed = true;
+                }
+                else
+                {
+                    preview.Removed = entriesToDelete.Count;
+                    foreach (PwEntry old in entriesToDelete)
+                    {
+                        preview.RemovedTitles.Add(old.Strings.ReadSafe(PwDefs.TitleField));
+                    }
+                }
+            }
+
+            return preview;
+        }
+
+        /// <summary>
         /// Merges the fetched vault content into the KeePass database.
         /// Must be called on the KeePass UI thread.
         /// </summary>
@@ -211,6 +315,19 @@ namespace VaultwardenSync
                 rootGroup.AddGroup(targetRoot, true);
                 result.DatabaseModified = true;
                 Log(string.Format("Created target sync root group: '{0}'", _config.TargetGroupName));
+            }
+            else
+            {
+                // Never merge a different account into a group that mirrors another one:
+                // every existing entry would be treated as deleted.
+                string storedAccount = targetRoot.CustomData.Get(AccountIdKey);
+                if (!string.IsNullOrEmpty(storedAccount) && !string.IsNullOrEmpty(data.AccountId)
+                    && !string.Equals(storedAccount, data.AccountId, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        "The group '" + _config.TargetGroupName + "' contains the entries of a different Vaultwarden account. " +
+                        "Nothing was changed. Choose another target group for this account.");
+                }
             }
 
             // 2. Map Vaultwarden Organizations to KeePass Sub-Groups under Target Root
@@ -312,77 +429,7 @@ namespace VaultwardenSync
                 // Work out the complete set of strings this entry should have ...
                 var desired = new Dictionary<string, ProtectedString>();
                 var obsolete = new List<string>();
-
-                desired[PwDefs.TitleField] = new ProtectedString(false, displayName);
-
-                if (cipher.type == 1 && cipher.login != null) // Login type
-                {
-                    desired[PwDefs.UserNameField] = new ProtectedString(false, cipher.login.username ?? string.Empty);
-                    desired[PwDefs.PasswordField] = new ProtectedString(true, cipher.login.password ?? string.Empty);
-
-                    // Map primary URI
-                    string url = string.Empty;
-                    if (cipher.login.uris != null && cipher.login.uris.Count > 0 && cipher.login.uris[0] != null)
-                    {
-                        url = cipher.login.uris[0].uri ?? string.Empty;
-                    }
-                    desired[PwDefs.UrlField] = new ProtectedString(false, url);
-
-                    // Map TOTP
-                    if (!string.IsNullOrEmpty(cipher.login.totp))
-                    {
-                        string otpUrl = cipher.login.totp;
-                        if (!otpUrl.StartsWith("otpauth://", StringComparison.OrdinalIgnoreCase))
-                        {
-                            otpUrl = "otpauth://totp/" + Uri.EscapeDataString(cipher.name ?? "Vaultwarden") + "?secret=" + otpUrl;
-                        }
-                        desired[OtpField] = new ProtectedString(true, otpUrl);
-                    }
-                    else
-                    {
-                        obsolete.Add(OtpField);
-                    }
-                }
-                else // Secure Note type
-                {
-                    obsolete.Add(PwDefs.UserNameField);
-                    obsolete.Add(PwDefs.PasswordField);
-                    obsolete.Add(PwDefs.UrlField);
-                    obsolete.Add(OtpField);
-                }
-
-                desired[PwDefs.NotesField] = new ProtectedString(false, cipher.notes ?? string.Empty);
-
-                // Custom fields from Vaultwarden. Names that would collide with a standard
-                // field, with VW_ID/otp or with another field of the same item get a suffix
-                // instead of overwriting it.
-                var customNames = new List<string>();
-                if (cipher.fields != null)
-                {
-                    foreach (var field in cipher.fields)
-                    {
-                        if (field == null) continue;
-
-                        string fieldName = MakeUniqueFieldName(field.name, desired);
-
-                        // Type 2 is hidden/protected text in Bitwarden
-                        bool isProtected = (field.type == 2);
-                        desired[fieldName] = new ProtectedString(isProtected, field.value ?? string.Empty);
-                        customNames.Add(fieldName);
-                    }
-                }
-
-                // Remove only those custom fields that an earlier sync created and that
-                // no longer exist in Vaultwarden. Everything else on the entry is kept.
-                foreach (string oldName in SplitTrackedFields(ReadTrackedFields(entry)))
-                {
-                    if (!desired.ContainsKey(oldName) && !IsReservedField(oldName))
-                    {
-                        obsolete.Add(oldName);
-                    }
-                }
-
-                string trackedFields = string.Join("\n", customNames.ToArray());
+                string trackedFields = BuildDesiredStrings(cipher, entry, desired, obsolete);
 
                 // ... and only touch the entry if something actually differs.
                 if (isNew || NeedsUpdate(entry, desired, obsolete, trackedFields))
@@ -468,6 +515,22 @@ namespace VaultwardenSync
                 }
             }
 
+            // Remember which account this group mirrors and how recent its data is
+            if (!string.IsNullOrEmpty(data.AccountId) && targetRoot.CustomData.Get(AccountIdKey) != data.AccountId)
+            {
+                targetRoot.CustomData.Set(AccountIdKey, data.AccountId);
+                result.DatabaseModified = true;
+            }
+            if (!string.IsNullOrEmpty(data.SnapshotCreatedUtc))
+            {
+                string last = targetRoot.CustomData.Get(LastSnapshotKey);
+                if (string.IsNullOrEmpty(last) || string.CompareOrdinal(data.SnapshotCreatedUtc, last) > 0)
+                {
+                    targetRoot.CustomData.Set(LastSnapshotKey, data.SnapshotCreatedUtc);
+                    result.DatabaseModified = true;
+                }
+            }
+
             if (result.Skipped > 0)
             {
                 Log(string.Format("Skipped {0} items of unsupported types (cards, identities, SSH keys).", result.Skipped));
@@ -476,6 +539,88 @@ namespace VaultwardenSync
                 result.Added, result.Updated, result.Moved, result.Removed, result.Unchanged));
 
             return result;
+        }
+
+        /// <summary>
+        /// Works out the strings an entry should have for a Vaultwarden item: fills 'desired' and
+        /// 'obsolete' and returns the list of custom field names to remember. Does not change anything.
+        /// 'existing' is the current entry, or null for a new one.
+        /// </summary>
+        private static string BuildDesiredStrings(BwCipher cipher, PwEntry existing,
+            Dictionary<string, ProtectedString> desired, List<string> obsolete)
+        {
+            string displayName = cipher.name ?? string.Empty;
+
+            desired[PwDefs.TitleField] = new ProtectedString(false, displayName);
+
+            if (cipher.type == 1 && cipher.login != null) // Login type
+            {
+                desired[PwDefs.UserNameField] = new ProtectedString(false, cipher.login.username ?? string.Empty);
+                desired[PwDefs.PasswordField] = new ProtectedString(true, cipher.login.password ?? string.Empty);
+
+                // Map primary URI
+                string url = string.Empty;
+                if (cipher.login.uris != null && cipher.login.uris.Count > 0 && cipher.login.uris[0] != null)
+                {
+                    url = cipher.login.uris[0].uri ?? string.Empty;
+                }
+                desired[PwDefs.UrlField] = new ProtectedString(false, url);
+
+                // Map TOTP
+                if (!string.IsNullOrEmpty(cipher.login.totp))
+                {
+                    string otpUrl = cipher.login.totp;
+                    if (!otpUrl.StartsWith("otpauth://", StringComparison.OrdinalIgnoreCase))
+                    {
+                        otpUrl = "otpauth://totp/" + Uri.EscapeDataString(cipher.name ?? "Vaultwarden") + "?secret=" + otpUrl;
+                    }
+                    desired[OtpField] = new ProtectedString(true, otpUrl);
+                }
+                else
+                {
+                    obsolete.Add(OtpField);
+                }
+            }
+            else // Secure Note type
+            {
+                obsolete.Add(PwDefs.UserNameField);
+                obsolete.Add(PwDefs.PasswordField);
+                obsolete.Add(PwDefs.UrlField);
+                obsolete.Add(OtpField);
+            }
+
+            desired[PwDefs.NotesField] = new ProtectedString(false, cipher.notes ?? string.Empty);
+
+            // Custom fields from Vaultwarden. Names that would collide with a standard
+            // field, with VW_ID/otp or with another field of the same item get a suffix
+            // instead of overwriting it.
+            var customNames = new List<string>();
+            if (cipher.fields != null)
+            {
+                foreach (var field in cipher.fields)
+                {
+                    if (field == null) continue;
+
+                    string fieldName = MakeUniqueFieldName(field.name, desired);
+
+                    // Type 2 is hidden/protected text in Bitwarden
+                    bool isProtected = (field.type == 2);
+                    desired[fieldName] = new ProtectedString(isProtected, field.value ?? string.Empty);
+                    customNames.Add(fieldName);
+                }
+            }
+
+            // Remove only those custom fields that an earlier sync created and that
+            // no longer exist in Vaultwarden. Everything else on the entry is kept.
+            foreach (string oldName in SplitTrackedFields(existing == null ? string.Empty : ReadTrackedFields(existing)))
+            {
+                if (!desired.ContainsKey(oldName) && !IsReservedField(oldName))
+                {
+                    obsolete.Add(oldName);
+                }
+            }
+
+            return string.Join("\n", customNames.ToArray());
         }
 
         private PwGroup FindSubGroup(PwGroup parent, string name)

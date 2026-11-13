@@ -19,6 +19,10 @@ namespace VaultwardenSync
         private SnapshotSource _snapshotSource;
         private bool _busy;
         private bool _snapshotMode;
+        private bool _verifyOnly;
+
+        // A snapshot older than this is pointed out before it is imported
+        private const double SnapshotAgeWarningDays = 7.0;
         private readonly bool _startWithSnapshot;
 
         /// <summary>True if the sync (or saving the settings) changed the database.</summary>
@@ -64,6 +68,7 @@ namespace VaultwardenSync
         private Button btnBrowseCli;
 
         private CheckBox chkSaveConfig;
+        private Button btnVerify;
         private Button btnSync;
         private Button btnCancel;
 
@@ -199,7 +204,10 @@ namespace VaultwardenSync
             // Sync and Cancel Buttons
             btnSync = new Button { Text = "Synchronize", Location = new Point(275, currentY), Size = new Size(95, 30), DialogResult = DialogResult.None };
             btnCancel = new Button { Text = "Close", Location = new Point(380, currentY), Size = new Size(80, 30), DialogResult = DialogResult.Cancel };
+            btnVerify = new Button { Text = "Check only", Location = new Point(170, currentY), Size = new Size(95, 30), DialogResult = DialogResult.None, Visible = false };
             btnSync.Click += BtnSync_Click;
+            btnVerify.Click += BtnVerify_Click;
+            this.Controls.Add(btnVerify);
             this.Controls.Add(btnSync);
             this.Controls.Add(btnCancel);
 
@@ -264,6 +272,7 @@ namespace VaultwardenSync
             txtCliPath.Visible = live;
             btnBrowseCli.Visible = live;
             pnlSnapshot.Visible = _snapshotMode;
+            btnVerify.Visible = _snapshotMode;
 
             btnSync.Text = _snapshotMode ? "Import" : "Synchronize";
             this.Text = _snapshotMode ? "Import Vaultwarden Snapshot" : "Vaultwarden Sync Options";
@@ -377,8 +386,20 @@ namespace VaultwardenSync
 
         private void BtnSync_Click(object sender, EventArgs e)
         {
+            StartRun(false);
+        }
+
+        private void BtnVerify_Click(object sender, EventArgs e)
+        {
+            // Decrypts the snapshot and shows what an import would change. The database is not touched.
+            StartRun(true);
+        }
+
+        private void StartRun(bool verifyOnly)
+        {
             // Validation
             if (_busy) return;
+            _verifyOnly = verifyOnly && _snapshotMode;
 
             if (_snapshotMode)
             {
@@ -430,8 +451,16 @@ namespace VaultwardenSync
                 return;
             }
 
-            // Save configuration settings
-            SaveConfigValues();
+            if (_verifyOnly)
+            {
+                // A check must not change anything, so the settings are not saved either
+                _config.TargetGroupName = txtTargetGroup.Text.Trim();
+            }
+            else
+            {
+                // Save configuration settings
+                SaveConfigValues();
+            }
 
             // Store password for the background worker to access
             _syncPassword = txtMasterPassword.Text;
@@ -499,23 +528,81 @@ namespace VaultwardenSync
 
             Exception error = e.Error;
             SyncResult result = null;
+            bool cancelled = false;
 
             if (error == null)
             {
-                // UI thread: the database is only modified here, never concurrently with KeePass
-                try
+                // UI thread: the database is only read or modified here, never concurrently with KeePass
+                VaultData data = (VaultData)e.Result;
+                bool proceed = true;
+
+                if (_snapshotMode)
                 {
-                    result = _engine.ApplyToDatabase((VaultData)e.Result);
-                    if (result.DatabaseModified)
+                    // Show what would change before anything is written
+                    try
                     {
-                        DatabaseModified = true;
+                        ImportPreview preview = _engine.Preview(data);
+                        bool hasWarnings;
+                        string summary = BuildPreviewText(data, preview, out hasWarnings);
+                        AppendLog(summary.Replace("\n", Environment.NewLine + "           "));
+
+                        if (IsOtherAccount(data, preview))
+                        {
+                            throw new InvalidOperationException(
+                                "The group '" + _config.TargetGroupName + "' contains the entries of a different Vaultwarden account " +
+                                "than this snapshot (" + (data.AccountEmail ?? "unknown") + "). Nothing was changed. " +
+                                "Choose another target group for this account.");
+                        }
+
+                        if (_verifyOnly)
+                        {
+                            proceed = false;
+                            cancelled = true;
+                            MessageBox.Show(
+                                "The snapshot can be decrypted. Nothing was changed.\n\n" + summary,
+                                "Snapshot Check",
+                                MessageBoxButtons.OK,
+                                hasWarnings ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+                        }
+                        else
+                        {
+                            DialogResult answer = MessageBox.Show(
+                                summary + "\n\nImport now?",
+                                "Import Vaultwarden Snapshot",
+                                MessageBoxButtons.YesNo,
+                                hasWarnings ? MessageBoxIcon.Warning : MessageBoxIcon.Question,
+                                hasWarnings ? MessageBoxDefaultButton.Button2 : MessageBoxDefaultButton.Button1);
+                            if (answer != DialogResult.Yes)
+                            {
+                                proceed = false;
+                                cancelled = true;
+                                AppendLog("Import cancelled. Nothing was changed.");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        error = ex;
+                        proceed = false;
                     }
                 }
-                catch (Exception ex)
+
+                if (proceed)
                 {
-                    error = ex;
-                    // The update may have stopped half-way
-                    DatabaseModified = true;
+                    try
+                    {
+                        result = _engine.ApplyToDatabase(data);
+                        if (result.DatabaseModified)
+                        {
+                            DatabaseModified = true;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        error = ex;
+                        // The update may have stopped half-way
+                        DatabaseModified = true;
+                    }
                 }
             }
 
@@ -534,6 +621,12 @@ namespace VaultwardenSync
                 return;
             }
 
+            if (cancelled)
+            {
+                // The dialog stays open, so that the import can be started after a check
+                return;
+            }
+
             SyncSucceeded = true;
             txtMasterPassword.Clear();
 
@@ -544,6 +637,100 @@ namespace VaultwardenSync
                 _snapshotMode ? "Import Success" : "Sync Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
             this.DialogResult = DialogResult.OK;
             this.Close();
+        }
+
+        private static bool IsOtherAccount(VaultData data, ImportPreview preview)
+        {
+            return !string.IsNullOrEmpty(preview.StoredAccountId)
+                && !string.IsNullOrEmpty(data.AccountId)
+                && !string.Equals(preview.StoredAccountId, data.AccountId, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Describes the snapshot and what importing it would change. Lines that need attention start with "WARNING".
+        /// </summary>
+        private static string BuildPreviewText(VaultData data, ImportPreview preview, out bool hasWarnings)
+        {
+            System.Text.StringBuilder text = new System.Text.StringBuilder();
+            System.Text.StringBuilder warnings = new System.Text.StringBuilder();
+
+            text.Append("Account: ").Append(string.IsNullOrEmpty(data.AccountEmail) ? "(unknown)" : data.AccountEmail);
+            if (!string.IsNullOrEmpty(data.Server)) text.Append(" on ").Append(data.Server);
+            text.Append("\n");
+
+            DateTime created;
+            bool hasDate = DateTime.TryParse(
+                data.SnapshotCreatedUtc,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                out created);
+            if (hasDate)
+            {
+                double ageDays = (DateTime.UtcNow - created).TotalDays;
+                string age = ageDays < 1.0
+                    ? "less than a day old"
+                    : string.Format("{0} day(s) old", (int)Math.Floor(ageDays));
+                text.Append("Snapshot from ").Append(created.ToLocalTime().ToString("yyyy-MM-dd HH:mm")).Append(" (").Append(age).Append(")\n");
+
+                if (ageDays > SnapshotAgeWarningDays)
+                {
+                    warnings.Append("WARNING: The snapshot is more than ").Append((int)SnapshotAgeWarningDays)
+                        .Append(" days old. Newer changes in KeePass would be reset to this state.\n");
+                }
+            }
+            else
+            {
+                text.Append("Snapshot date: unknown\n");
+            }
+
+            if (!string.IsNullOrEmpty(preview.LastSnapshotUtc) && !string.IsNullOrEmpty(data.SnapshotCreatedUtc)
+                && string.CompareOrdinal(data.SnapshotCreatedUtc, preview.LastSnapshotUtc) < 0)
+            {
+                warnings.Append("WARNING: A newer snapshot (").Append(preview.LastSnapshotUtc)
+                    .Append(" UTC) has already been imported into this group.\n");
+            }
+
+            // More than a fifth of the existing entries would go: likely the wrong snapshot or group
+            if (preview.Removed > 0 && preview.Removed * 5 > preview.ExistingEntries)
+            {
+                warnings.Append("WARNING: ").Append(preview.Removed).Append(" of ").Append(preview.ExistingEntries)
+                    .Append(" existing entries would be removed.\n");
+            }
+            if (preview.RemovalSuppressed)
+            {
+                warnings.Append("WARNING: The snapshot contains no logins or notes. Existing entries would be kept.\n");
+            }
+
+            text.Append("\n");
+            text.Append(string.Format("{0} new, {1} changed, {2} removed, {3} unchanged, {4} skipped (unsupported type).\n",
+                preview.Added, preview.Updated, preview.Removed, preview.Unchanged, preview.Skipped));
+            AppendTitles(text, "Changed", preview.UpdatedTitles);
+            AppendTitles(text, "Removed", preview.RemovedTitles);
+
+            hasWarnings = warnings.Length > 0;
+            if (hasWarnings)
+            {
+                text.Append("\n").Append(warnings.ToString());
+            }
+            return text.ToString().TrimEnd();
+        }
+
+        private static void AppendTitles(System.Text.StringBuilder text, string label, System.Collections.Generic.List<string> titles)
+        {
+            if (titles == null || titles.Count == 0) return;
+
+            const int maxShown = 8;
+            text.Append(label).Append(": ");
+            for (int i = 0; i < titles.Count && i < maxShown; i++)
+            {
+                if (i > 0) text.Append(", ");
+                text.Append(string.IsNullOrEmpty(titles[i]) ? "(no title)" : titles[i]);
+            }
+            if (titles.Count > maxShown)
+            {
+                text.Append(" and ").Append(titles.Count - maxShown).Append(" more");
+            }
+            text.Append("\n");
         }
 
         private void AppendLog(string message)
@@ -563,6 +750,7 @@ namespace VaultwardenSync
             btnBrowseCli.Enabled = enabled;
             chkSaveConfig.Enabled = enabled;
             btnSync.Enabled = enabled;
+            btnVerify.Enabled = enabled;
             btnCancel.Enabled = enabled;
         }
     }

@@ -19,8 +19,9 @@
     same computer can read it. Afterwards run the script without parameters,
     for example from the Windows Task Scheduler (see Register-BackupTask.ps1).
 
-    Exit codes: 0 = success, 10 = configuration, 20 = login failed,
-                30 = download failed, 40 = verification or write failed.
+    Exit codes: 0 = success, 1 = unexpected error, 10 = configuration,
+                20 = login failed, 30 = download failed,
+                40 = verification or write failed.
 
 .PARAMETER Setup
     Interactive one-time setup.
@@ -235,6 +236,33 @@ function Test-Snapshot {
     return @{ Ciphers = $ciphers.Count; Folders = $folderCount; Organizations = $orgCount }
 }
 
+function Get-BroadFolderAccess {
+    # Names of broad groups (Everyone, Authenticated Users, Users) that may read the
+    # folder. The snapshots can be attacked offline by anyone who can copy them.
+    param([string]$Path)
+    $found = @()
+    try {
+        $broad = @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')
+        $acl = Get-Acl -LiteralPath $Path
+        foreach ($rule in $acl.Access) {
+            if ([string]$rule.AccessControlType -ne 'Allow') { continue }
+            $sid = $null
+            try {
+                $sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+            } catch {
+                $sid = $null
+            }
+            if ($sid -and ($broad -contains $sid)) {
+                $name = [string]$rule.IdentityReference
+                if ($found -notcontains $name) { $found += $name }
+            }
+        }
+    } catch {
+        # The check is only a hint; it must never stop a backup
+    }
+    return , $found
+}
+
 function Read-ConfigFile {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
@@ -290,6 +318,14 @@ if ($Setup) {
     Save-ConfigFile $ConfigPath $config
     if (-not (Test-Path -LiteralPath $out)) { New-Item -ItemType Directory -Path $out -Force | Out-Null }
 
+    $broadAccess = Get-BroadFolderAccess $out
+    if ($broadAccess.Count -gt 0) {
+        Write-Host ''
+        Write-Host ('WARNING: Other users of this computer can read the backup folder (' + ($broadAccess -join ', ') + ').')
+        Write-Host 'Anyone who can copy a snapshot can try to guess the master password offline.'
+        Write-Host 'Use a folder inside your user profile, or restrict the folder to your own account.'
+    }
+
     Write-Host ''
     Write-Host "Saved to $ConfigPath"
     Write-Host 'The secret is protected for this Windows user on this computer only.'
@@ -343,6 +379,11 @@ try {
 
 try {
     Write-Log "Starting backup from $server"
+
+    $broadAccess = Get-BroadFolderAccess $OutputDir
+    if ($broadAccess.Count -gt 0) {
+        Write-Log ('Other users of this computer can read the backup folder (' + ($broadAccess -join ', ') + '). Restrict it to your own account.') 'WARN'
+    }
 
     # Decrypt the API secret (DPAPI, current Windows user)
     $clientSecret = $null

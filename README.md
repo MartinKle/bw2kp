@@ -62,7 +62,10 @@ More details (exit codes, task handling, snapshot format, security): [backup/REA
 ### 3. Import a snapshot into KeePass (stage 2)
 1. Open your database, then **Tools > Import Vaultwarden snapshot...**.
 2. **Snapshot file or backup folder:** the backup folder (the newest snapshot is used) or one specific file.
-3. Enter your **master password** (kept in memory only) and the **Target Group** (default `Vaultwarden Sync`), then click **Import**.
+3. Enter your **master password** (kept in memory only) and the **Target Group** (default `Vaultwarden Sync`).
+4. Click **Import**. The snapshot is decrypted and a summary shows the account, the age of the snapshot and what would be added, changed and removed. Nothing is written until you confirm. **Check only** shows the same summary without the option to import, as a test that the backup can be restored.
+
+The import warns if the snapshot is more than 7 days old, if a newer snapshot was already imported, or if more than a fifth of the existing entries would be removed. It refuses to import the snapshot of a different account into a group that already mirrors another one.
 
 Items land in the target group, folders keep their hierarchy, and organization items go to `Target Group > [Organization name]`. Run the import again whenever you want to refresh KeePass; only real changes are written.
 
@@ -107,6 +110,7 @@ Needs only the .NET Framework compiler (`csc.exe`) that ships with Windows.
 This project is licensed under the GNU General Public License v3.0 (GPLv3). See the [LICENSE](LICENSE) file for details.
 
 ## Version History
+- **v0.5.0**: Import shows a summary and asks before writing; "Check only" mode; warnings for old snapshots and mass removals; a target group is bound to one account; the backup warns about a backup folder that other users can read; security notes extended.
 - **v0.4.1**: Hardening after the security review: the backup reads the account e-mail from the profile (an identity item could be picked up before), no HTTP redirects are followed, values without MAC are rejected under keys that have one, and the PBKDF2 iteration count of a snapshot must be plausible.
 - **v0.4.0**: Two-stage mode (snapshot is the recommended way, the live sync stays available): encrypted snapshot backup (`backup\`) and import of snapshots into KeePass (Tools > Import Vaultwarden snapshot...); Python reference decryptor and tests.
 - **v0.3.0**: Session key no longer passed on the command line, UTF-8 CLI output, entry history and change detection, custom-field collision handling, Recycle Bin fix, CLI timeout, database updates on the UI thread, separate CLI profile, CLI path stored per computer.
