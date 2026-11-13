@@ -62,16 +62,16 @@ foreach ($f in $sourceFiles) {
 }
 
 $references = @(
-    "/reference:""$KeePassDir\KeePass.exe""",
-    "/reference:""System.dll""",
-    "/reference:""System.Core.dll""",
-    "/reference:""System.Drawing.dll""",
-    "/reference:""System.Windows.Forms.dll""",
-    "/reference:""System.Runtime.Serialization.dll""",
-    "/reference:""System.Security.dll"""
+    "/reference:$KeePassDir\KeePass.exe",
+    "/reference:System.dll",
+    "/reference:System.Core.dll",
+    "/reference:System.Drawing.dll",
+    "/reference:System.Windows.Forms.dll",
+    "/reference:System.Runtime.Serialization.dll",
+    "/reference:System.Security.dll"
 )
 
-$cscArgs = @("/target:library", "/out:""$devDir\VaultwardenSync.dll""") + $references + $sourceFiles
+$cscArgs = @("/target:library", "/out:$devDir\VaultwardenSync.dll") + $references + $sourceFiles
 Write-Host ""
 Write-Host "Running csc.exe..."
 $cscOutput = & $csc $cscArgs 2>&1
