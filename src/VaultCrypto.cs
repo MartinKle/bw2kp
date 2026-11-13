@@ -234,6 +234,13 @@ namespace VaultwardenSync
                 throw new CryptographicException("Invalid initialization vector.");
             }
 
+            if (e.Type == 0 && key.MacKey != null)
+            {
+                // Type 0 has no MAC. Accepting it under a key that has a MAC key would let a
+                // modified snapshot bypass the integrity check.
+                throw new CryptographicException("An unauthenticated value (type 0) is not accepted for this key.");
+            }
+
             if (e.Type == 2)
             {
                 if (key.MacKey == null) throw new CryptographicException("This value needs a key with a MAC key.");

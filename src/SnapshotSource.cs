@@ -185,6 +185,11 @@ namespace VaultwardenSync
         public const string SnapshotFormat = "vaultwarden-encrypted-snapshot";
         public const string SnapshotFilePattern = "vaultwarden-snapshot-*.json";
 
+        // The iteration count comes from the snapshot file. Limits keep a damaged or
+        // modified file from making the import run (almost) forever.
+        public const int MinPbkdf2Iterations = 5000;
+        public const int MaxPbkdf2Iterations = 10000000;
+
         private readonly string _path;
 
         public event Action<string> OnLogMessage;
@@ -305,6 +310,12 @@ namespace VaultwardenSync
             {
                 throw new NotSupportedException(
                     "This account derives its key with Argon2id. Importing snapshots is only supported for PBKDF2-SHA256 so far.");
+            }
+
+            if (iterations < MinPbkdf2Iterations || iterations > MaxPbkdf2Iterations)
+            {
+                throw new InvalidDataException(
+                    "The snapshot contains an implausible number of PBKDF2 iterations (" + iterations + ").");
             }
 
             string salt = (unlock != null && !string.IsNullOrEmpty(unlock.salt)) ? unlock.salt : (doc.email ?? profile.email);

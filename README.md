@@ -107,6 +107,7 @@ Needs only the .NET Framework compiler (`csc.exe`) that ships with Windows.
 This project is licensed under the GNU General Public License v3.0 (GPLv3). See the [LICENSE](LICENSE) file for details.
 
 ## Version History
+- **v0.4.1**: Hardening after the security review: the backup reads the account e-mail from the profile (an identity item could be picked up before), no HTTP redirects are followed, values without MAC are rejected under keys that have one, and the PBKDF2 iteration count of a snapshot must be plausible.
 - **v0.4.0**: Two-stage mode (snapshot is the recommended way, the live sync stays available): encrypted snapshot backup (`backup\`) and import of snapshots into KeePass (Tools > Import Vaultwarden snapshot...); Python reference decryptor and tests.
 - **v0.3.0**: Session key no longer passed on the command line, UTF-8 CLI output, entry history and change detection, custom-field collision handling, Recycle Bin fix, CLI timeout, database updates on the UI thread, separate CLI profile, CLI path stored per computer.
 - **v0.2.0**: Added automatic organization segregation, native DB config storage, deadlock fix, and auto-save.

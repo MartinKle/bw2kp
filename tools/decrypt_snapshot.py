@@ -33,6 +33,12 @@ class WrongPassword(Exception):
     pass
 
 
+# The iteration count comes from the snapshot file. Limits keep a damaged or
+# modified file from making the import run (almost) forever.
+MIN_PBKDF2_ITERATIONS = 5000
+MAX_PBKDF2_ITERATIONS = 10000000
+
+
 # ----------------------------------------------------------------------------
 # Key derivation
 # ----------------------------------------------------------------------------
@@ -87,6 +93,10 @@ def decrypt_bytes(value, key):
     if enc_type not in (0, 2):
         raise ValueError("unsupported symmetric type %d" % enc_type)
     enc_key, mac_key = key[:32], (key[32:] if len(key) == 64 else None)
+    if enc_type == 0 and mac_key is not None:
+        # Type 0 has no MAC. Accepting it under a key that has a MAC key would let a
+        # modified snapshot bypass the integrity check.
+        raise ValueError("unauthenticated value (type 0) is not accepted for this key")
     if enc_type == 2:
         if mac_key is None:
             raise ValueError("a MAC key is required")
@@ -143,6 +153,8 @@ def decrypt_snapshot(doc, password):
     salt = unlock.get("salt") or doc.get("email") or profile.get("email")
     wrapped = profile.get("key") or unlock.get("masterKeyWrappedUserKey")
 
+    if kdf_type == 0 and not (MIN_PBKDF2_ITERATIONS <= iterations <= MAX_PBKDF2_ITERATIONS):
+        raise ValueError("implausible number of PBKDF2 iterations in the snapshot: %r" % iterations)
     master_key = derive_master_key(password, salt, kdf_type, iterations, memory, parallelism)
     wrap_type = parse_enc(wrapped)[0]
     wrapping_key = stretch(master_key) if wrap_type == 2 else master_key

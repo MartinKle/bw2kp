@@ -114,6 +114,8 @@ function Invoke-Http {
     $req.ReadWriteTimeout = 120000
     $req.UserAgent = 'VaultwardenBackup/1.0'
     $req.Accept = 'application/json'
+    # Never follow redirects: the API secret and the vault must only go to the configured address
+    $req.AllowAutoRedirect = $false
     $req.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
 
     if ($Headers) {
@@ -140,8 +142,13 @@ function Invoke-Http {
         $reader = New-Object System.IO.StreamReader($resp.GetResponseStream(), [System.Text.Encoding]::UTF8)
         try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
         $status = [int]$resp.StatusCode
+        $location = [string]$resp.Headers['Location']
     } finally {
         $resp.Close()
+    }
+
+    if ($status -ge 300 -and $status -lt 400) {
+        throw ('The server answered with a redirect (HTTP {0}) to "{1}". Redirects are not followed; enter the final server URL with -Setup.' -f $status, $location)
     }
 
     return [pscustomobject]@{ Status = $status; Text = $text }
@@ -174,31 +181,35 @@ function Get-JsonValue {
     return $null
 }
 
-function Test-Snapshot {
-    # Returns a hashtable with Ciphers, Folders, Organizations, or $null if the
-    # content is incomplete. Falls back to a coarse text check where the JSON
-    # serializer of Windows PowerShell is not available.
+function ConvertFrom-JsonText {
+    # Parses JSON into dictionaries and arrays. ConvertFrom-Json of Windows PowerShell is
+    # not used because it fails on objects whose keys differ only in case.
     param([string]$Json)
 
-    $deep = $true
+    $useSerializer = $true
     try {
         Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop
     } catch {
-        $deep = $false
+        $useSerializer = $false
     }
 
-    if (-not $deep) {
-        Write-Log 'Detailed verification is not available on this PowerShell; doing a basic check.' 'WARN'
-        if ($Json -match '"profile"' -and $Json -match '"ciphers"' -and $Json -match '"kdf') {
-            return @{ Ciphers = -1; Folders = -1; Organizations = -1 }
-        }
-        return $null
+    if ($useSerializer) {
+        $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+        $ser.MaxJsonLength = [int]::MaxValue
+        $ser.RecursionLimit = 200
+        return , $ser.DeserializeObject($Json)
     }
 
-    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $ser.MaxJsonLength = [int]::MaxValue
-    $ser.RecursionLimit = 200
-    $doc = $ser.DeserializeObject($Json)
+    # PowerShell 7 and later
+    return , (ConvertFrom-Json -InputObject $Json -AsHashtable)
+}
+
+function Test-Snapshot {
+    # Returns a hashtable with Ciphers, Folders, Organizations, or $null if the
+    # content is incomplete.
+    param([string]$Json)
+
+    $doc = ConvertFrom-JsonText $Json
 
     $sync = Get-JsonValue $doc @('sync')
     $pre = Get-JsonValue $doc @('prelogin')
@@ -210,6 +221,11 @@ function Test-Snapshot {
     if ($null -eq $profile -or $null -eq $ciphers) { return $null }
     if ($null -eq (Get-JsonValue $profile @('key', 'Key'))) { return $null }
     if ($null -eq (Get-JsonValue $pre @('kdf', 'Kdf'))) { return $null }
+
+    # The e-mail address is the salt of the key derivation: it must be the account's own
+    $docEmail = [string](Get-JsonValue $doc @('email'))
+    $profileEmail = [string](Get-JsonValue $profile @('email', 'Email'))
+    if (-not $docEmail -or $docEmail.IndexOf('@') -lt 1 -or $docEmail -cne $profileEmail) { return $null }
 
     $folderCount = 0
     if ($null -ne $folders) { $folderCount = $folders.Count }
@@ -366,9 +382,13 @@ try {
         Stop-Backup 20 ('Login failed (HTTP {0}). {1}' -f $tokenResponse.Status, $hint)
     }
 
-    $m = [regex]::Match($tokenResponse.Text, '"access_token"\s*:\s*"([^"]+)"')
-    if (-not $m.Success) { Stop-Backup 20 'The server did not return an access token.' }
-    $accessToken = $m.Groups[1].Value
+    $accessToken = $null
+    try {
+        $accessToken = [string](Get-JsonValue (ConvertFrom-JsonText $tokenResponse.Text) @('access_token'))
+    } catch {
+        $accessToken = $null
+    }
+    if (-not $accessToken) { Stop-Backup 20 'The server did not return an access token.' }
     $tokenResponse = $null
 
     # 2. Download the encrypted vault
@@ -389,12 +409,23 @@ try {
     $auth = $null
 
     # 3. Download the KDF settings (needed later to derive the master key)
-    $em = [regex]::Match($syncText, '"email"\s*:\s*"((?:[^"\\]|\\.)*)"')
-    if (-not $em.Success) { Stop-Backup 30 'The vault data does not contain the account e-mail address.' }
-    $emailRaw = $em.Groups[1].Value
+    # The address is read from the profile. A text search for "email" is not enough:
+    # the items come first in the data, and an identity item has an (encrypted) e-mail field too.
+    $email = $null
+    try {
+        $syncDoc = ConvertFrom-JsonText $syncText
+        $accountProfile = Get-JsonValue $syncDoc @('profile', 'Profile')
+        $email = [string](Get-JsonValue $accountProfile @('email', 'Email'))
+        $accountProfile = $null
+        $syncDoc = $null
+    } catch {
+        Stop-Backup 30 ('The vault data is not valid JSON: ' + $_.Exception.Message)
+    }
+    if (-not $email -or $email.IndexOf('@') -lt 1) { Stop-Backup 30 'The vault data does not contain the account e-mail address.' }
+    $emailJson = ConvertTo-JsonString $email
 
     Write-Log 'Downloading the KDF settings...'
-    $preBody = '{"email":"' + $emailRaw + '"}'
+    $preBody = '{"email":' + $emailJson + '}'
     $preText = $null
     foreach ($path in @('/identity/accounts/prelogin', '/api/accounts/prelogin')) {
         try {
@@ -409,7 +440,7 @@ try {
     $content = '{"format":"vaultwarden-encrypted-snapshot","version":1' +
         ',"createdUtc":' + (ConvertTo-JsonString $created) +
         ',"server":' + (ConvertTo-JsonString $server) +
-        ',"email":"' + $emailRaw + '"' +
+        ',"email":' + $emailJson +
         ',"prelogin":' + $preText +
         ',"sync":' + $syncText + '}'
     $syncText = $null
@@ -420,7 +451,7 @@ try {
     try { $stats = Test-Snapshot $content } catch {
         Stop-Backup 40 ('The downloaded data is not valid JSON: ' + $_.Exception.Message)
     }
-    if ($null -eq $stats) { Stop-Backup 40 'The downloaded data is incomplete (no profile key, items or KDF settings). Nothing was written.' }
+    if ($null -eq $stats) { Stop-Backup 40 'The downloaded data is incomplete (no profile key, items, KDF settings or account e-mail). Nothing was written.' }
 
     # 6. Write atomically
     $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
@@ -439,11 +470,7 @@ try {
 
     $hash = (Get-FileHash -LiteralPath $finalPath -Algorithm SHA256).Hash
     $size = (Get-Item -LiteralPath $finalPath).Length
-    if ($stats.Ciphers -ge 0) {
-        Write-Log ('Snapshot written: {0} ({1} bytes, {2} items, {3} folders, {4} organizations)' -f $finalPath, $size, $stats.Ciphers, $stats.Folders, $stats.Organizations)
-    } else {
-        Write-Log ('Snapshot written: {0} ({1} bytes)' -f $finalPath, $size)
-    }
+    Write-Log ('Snapshot written: {0} ({1} bytes, {2} items, {3} folders, {4} organizations)' -f $finalPath, $size, $stats.Ciphers, $stats.Folders, $stats.Organizations)
     Write-Log "SHA-256: $hash"
 
     # 7. Delete the oldest snapshots (only after a successful new one)

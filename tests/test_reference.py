@@ -42,7 +42,7 @@ def enc2s(text, key64):
     return None if text is None else enc2(text.encode("utf-8"), key64)
 
 
-def build_snapshot(password, email, iterations=1000):
+def build_snapshot(password, email, iterations=5000):
     master = hashlib.pbkdf2_hmac("sha256", password.encode(), email.lower().encode(), iterations, 32)
     # HKDF-Expand according to RFC 5869 (T(1) = HMAC(PRK, info | 0x01))
     stretched = hmac.new(master, b"enc\x01", hashlib.sha256).digest() + hmac.new(master, b"mac\x01", hashlib.sha256).digest()
@@ -258,6 +258,35 @@ def test_damaged_data_is_detected():
         assert "MAC" in str(exc)
         return
     raise AssertionError("a modified value was accepted")
+
+
+def test_value_without_mac_is_rejected():
+    # A modified snapshot must not be able to switch a value to type 0 (no MAC)
+    snap, _ = build_snapshot("pw", "alice@example.com")
+    c = snap["sync"]["ciphers"][0]
+    iv, ct, _mac = c["name"][2:].split("|")
+    c["name"] = "0.%s|%s" % (iv, ct)
+    try:
+        ref.decrypt_snapshot(snap, "pw")
+    except ValueError as exc:
+        assert "type 0" in str(exc)
+        return
+    raise AssertionError("a value without MAC was accepted")
+
+
+def test_implausible_iterations_are_rejected():
+    for bad in (1, 4999, 10000001):
+        snap, _ = build_snapshot("pw", "alice@example.com")
+        snap["prelogin"]["kdfIterations"] = bad
+        unlock = (snap["sync"].get("userDecryption") or {}).get("masterPasswordUnlock")
+        if unlock and unlock.get("kdf"):
+            unlock["kdf"]["iterations"] = bad
+        try:
+            ref.decrypt_snapshot(snap, "pw")
+        except ValueError as exc:
+            assert "iterations" in str(exc)
+            continue
+        raise AssertionError("%d iterations were accepted" % bad)
 
 
 if __name__ == "__main__":
