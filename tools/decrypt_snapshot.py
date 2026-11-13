@@ -159,6 +159,10 @@ def decrypt_snapshot(doc, password):
 
     if kdf_type == 0 and not (MIN_PBKDF2_ITERATIONS <= iterations <= MAX_PBKDF2_ITERATIONS):
         raise ValueError("implausible number of PBKDF2 iterations in the snapshot: %r" % iterations)
+    if kdf_type == 1:
+        iterations = kdf.get("iterations") or pre.get("kdfIterations") or 3
+        if not (1 <= iterations <= 100 and 15 <= (memory or 64) <= 4096 and 1 <= (parallelism or 4) <= 64):
+            raise ValueError("implausible Argon2id settings in the snapshot")
     master_key = derive_master_key(password, salt, kdf_type, iterations, memory, parallelism)
     wrap_type = parse_enc(wrapped)[0]
     wrapping_key = stretch(master_key) if wrap_type == 2 else master_key

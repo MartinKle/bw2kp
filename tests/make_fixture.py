@@ -60,6 +60,13 @@ def main():
         "folders": {f["id"]: f["name"] for f in vault["folders"]},
         "organizations": {o["id"]: o["name"] for o in orgs},
     })
+    try:
+        import argon2  # noqa: F401
+        snap_argon, _ = t.build_snapshot(PASSWORD, EMAIL, argon2=True)
+        os.makedirs(os.path.join(out, "snapshot-argon2"), exist_ok=True)
+        write(os.path.join("snapshot-argon2", "vaultwarden-snapshot-20261112-000000.json"), snap_argon)
+    except ImportError:
+        print("argon2-cffi is not installed: no Argon2id test data")
     print("Fixture written to", out)
 
 

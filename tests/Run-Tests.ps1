@@ -69,7 +69,13 @@ try {
     # ---- Stage 2 on a prepared snapshot ------------------------------------
     Write-Host ''
     Write-Host '== C# decryption of a prepared snapshot =='
-    & $testExe (Join-Path $work 'snapshot') (Join-Path $work 'expected.json')
+    $argonDir = Join-Path $work 'snapshot-argon2'
+    if (Test-Path -LiteralPath $argonDir) {
+        & $testExe (Join-Path $work 'snapshot') (Join-Path $work 'expected.json') $argonDir
+    } else {
+        Write-Host 'No Argon2id test data (argon2-cffi is not installed).'
+        & $testExe (Join-Path $work 'snapshot') (Join-Path $work 'expected.json')
+    }
     Assert-True ($LASTEXITCODE -eq 0) 'C# tests on the prepared snapshot'
 
     # ---- Stage 1 against the mock server -----------------------------------

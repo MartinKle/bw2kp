@@ -17,9 +17,9 @@ public static class SnapshotTest
 
     public static int Main(string[] args)
     {
-        if (args.Length != 2)
+        if (args.Length < 2 || args.Length > 3)
         {
-            Console.WriteLine("Usage: SnapshotTest.exe <snapshot file or folder> <expected.json>");
+            Console.WriteLine("Usage: SnapshotTest.exe <snapshot file or folder> <expected.json> [Argon2id snapshot]");
             return 2;
         }
 
@@ -45,6 +45,13 @@ public static class SnapshotTest
         Run("Modified value is detected", delegate { TestTamper(snapshotPath, password); });
         Run("Implausible iteration count is rejected", delegate { TestIterations(snapshotPath, password); });
         Run("Merge into a KeePass database (preview, import, update, removal, other account)", delegate { MergeTest.Scenario(snapshotPath, password); });
+
+        if (args.Length == 3)
+        {
+            string argonPath = args[2];
+            Run("Argon2id snapshot decrypts to the expected content", delegate { TestDecrypt(argonPath, password, expected); });
+            Run("Argon2id: wrong master password is reported", delegate { TestWrongPassword(argonPath, password); });
+        }
 
         Console.WriteLine(_failed == 0 ? "ALL TESTS PASSED" : (_failed + " TEST(S) FAILED"));
         return _failed == 0 ? 0 : 1;

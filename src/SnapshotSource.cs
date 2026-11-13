@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Security.Cryptography;
+using KeePassLib.Cryptography.KeyDerivation;
 
 namespace VaultwardenSync
 {
@@ -37,6 +38,10 @@ namespace VaultwardenSync
         public int? kdf { get; set; }
         [DataMember]
         public int? kdfIterations { get; set; }
+        [DataMember]
+        public int? kdfMemory { get; set; }
+        [DataMember]
+        public int? kdfParallelism { get; set; }
     }
 
     [DataContract]
@@ -77,6 +82,10 @@ namespace VaultwardenSync
         public int? kdfType { get; set; }
         [DataMember]
         public int? iterations { get; set; }
+        [DataMember]
+        public int? memory { get; set; }
+        [DataMember]
+        public int? parallelism { get; set; }
     }
 
     [DataContract]
@@ -329,27 +338,53 @@ namespace VaultwardenSync
 
             // Key derivation settings: the account's own settings first, then the prelogin response
             int kdfType = 0;
-            int iterations = 600000;
+            int? iterationsValue = null;
+            int? memoryValue = null;
+            int? parallelismValue = null;
             if (doc.prelogin != null)
             {
                 kdfType = doc.prelogin.kdf ?? kdfType;
-                iterations = doc.prelogin.kdfIterations ?? iterations;
+                iterationsValue = doc.prelogin.kdfIterations;
+                memoryValue = doc.prelogin.kdfMemory;
+                parallelismValue = doc.prelogin.kdfParallelism;
             }
             if (unlock != null && unlock.kdf != null)
             {
                 kdfType = unlock.kdf.kdfType ?? kdfType;
-                iterations = unlock.kdf.iterations ?? iterations;
-            }
-            if (kdfType != 0)
-            {
-                throw new NotSupportedException(
-                    "This account derives its key with Argon2id. Importing snapshots is only supported for PBKDF2-SHA256 so far.");
+                iterationsValue = unlock.kdf.iterations ?? iterationsValue;
+                memoryValue = unlock.kdf.memory ?? memoryValue;
+                parallelismValue = unlock.kdf.parallelism ?? parallelismValue;
             }
 
-            if (iterations < MinPbkdf2Iterations || iterations > MaxPbkdf2Iterations)
+            // The values come from the snapshot file. Limits keep a damaged or modified
+            // file from making the import run (almost) forever or exhaust the memory.
+            int iterations;
+            int memoryMiB = 0;
+            int parallelism = 0;
+            if (kdfType == 0)
             {
-                throw new InvalidDataException(
-                    "The snapshot contains an implausible number of PBKDF2 iterations (" + iterations + ").");
+                iterations = iterationsValue ?? 600000;
+                if (iterations < MinPbkdf2Iterations || iterations > MaxPbkdf2Iterations)
+                {
+                    throw new InvalidDataException(
+                        "The snapshot contains an implausible number of PBKDF2 iterations (" + iterations + ").");
+                }
+            }
+            else if (kdfType == 1)
+            {
+                iterations = iterationsValue ?? 3;
+                memoryMiB = memoryValue ?? 64;
+                parallelism = parallelismValue ?? 4;
+                if (iterations < 1 || iterations > 100 || memoryMiB < 15 || memoryMiB > 4096 || parallelism < 1 || parallelism > 64)
+                {
+                    throw new InvalidDataException(string.Format(
+                        "The snapshot contains implausible Argon2id settings ({0} iterations, {1} MiB, {2} threads).",
+                        iterations, memoryMiB, parallelism));
+                }
+            }
+            else
+            {
+                throw new NotSupportedException("The snapshot uses an unknown key derivation (type " + kdfType + "). Please update the plugin.");
             }
 
             string salt = (unlock != null && !string.IsNullOrEmpty(unlock.salt)) ? unlock.salt : (doc.email ?? profile.email);
@@ -368,8 +403,16 @@ namespace VaultwardenSync
 
             try
             {
-                Log(string.Format("Deriving the master key ({0} PBKDF2 iterations)...", iterations));
-                masterKey = VaultCrypto.DeriveMasterKey(masterPassword, salt, iterations);
+                if (kdfType == 0)
+                {
+                    Log(string.Format("Deriving the master key ({0} PBKDF2 iterations)...", iterations));
+                    masterKey = VaultCrypto.DeriveMasterKey(masterPassword, salt, iterations);
+                }
+                else
+                {
+                    Log(string.Format("Deriving the master key (Argon2id, {0} iterations, {1} MiB, {2} threads)...", iterations, memoryMiB, parallelism));
+                    masterKey = DeriveMasterKeyArgon2id(masterPassword, salt, iterations, memoryMiB, parallelism);
+                }
 
                 Log("Unlocking the vault key...");
                 userKey = VaultCrypto.UnwrapUserKey(wrappedUserKey, masterKey);
@@ -472,6 +515,45 @@ namespace VaultwardenSync
                 {
                     key.Clear();
                 }
+            }
+        }
+
+        /// <summary>
+        /// Master key of an account that uses Argon2id, computed with the Argon2 implementation
+        /// of KeePass. As in Bitwarden, the salt is the SHA-256 hash of the e-mail address.
+        /// </summary>
+        public static byte[] DeriveMasterKeyArgon2id(string password, string salt, int iterations, int memoryMiB, int parallelism)
+        {
+            if (string.IsNullOrEmpty(password)) throw new ArgumentException("The master password is empty.", "password");
+            if (string.IsNullOrEmpty(salt)) throw new ArgumentException("The salt (e-mail address) is empty.", "salt");
+
+            byte[] passwordBytes = System.Text.Encoding.UTF8.GetBytes(password);
+            try
+            {
+                byte[] saltHash;
+                using (SHA256 sha = SHA256.Create())
+                {
+                    saltHash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(salt.Trim().ToLowerInvariant()));
+                }
+
+                Argon2Kdf kdf = new Argon2Kdf(Argon2Type.ID);
+                KdfParameters parameters = kdf.GetDefaultParameters();
+                parameters.SetByteArray(Argon2Kdf.ParamSalt, saltHash);
+                parameters.SetUInt64(Argon2Kdf.ParamIterations, (ulong)iterations);
+                parameters.SetUInt64(Argon2Kdf.ParamMemory, (ulong)memoryMiB * 1024UL * 1024UL); // bytes
+                parameters.SetUInt32(Argon2Kdf.ParamParallelism, (uint)parallelism);
+                parameters.SetUInt32(Argon2Kdf.ParamVersion, 0x13);
+
+                byte[] key = kdf.Transform(passwordBytes, parameters);
+                if (key == null || key.Length != 32)
+                {
+                    throw new CryptographicException("Argon2id returned a key of unexpected length.");
+                }
+                return key;
+            }
+            finally
+            {
+                Array.Clear(passwordBytes, 0, passwordBytes.Length);
             }
         }
 

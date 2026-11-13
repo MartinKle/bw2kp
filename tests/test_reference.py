@@ -42,8 +42,17 @@ def enc2s(text, key64):
     return None if text is None else enc2(text.encode("utf-8"), key64)
 
 
-def build_snapshot(password, email, iterations=5000):
-    master = hashlib.pbkdf2_hmac("sha256", password.encode(), email.lower().encode(), iterations, 32)
+def build_snapshot(password, email, iterations=5000, argon2=False):
+    kdf_type, memory, parallelism = 0, None, None
+    if argon2:
+        # Argon2id as Bitwarden uses it: salt = SHA-256(e-mail), memory given in MiB
+        from argon2.low_level import hash_secret_raw, Type
+        kdf_type, iterations, memory, parallelism = 1, 3, 16, 2
+        master = hash_secret_raw(password.encode(), hashlib.sha256(email.lower().encode()).digest(),
+                                 time_cost=iterations, memory_cost=memory * 1024, parallelism=parallelism,
+                                 hash_len=32, type=Type.ID)
+    else:
+        master = hashlib.pbkdf2_hmac("sha256", password.encode(), email.lower().encode(), iterations, 32)
     # HKDF-Expand according to RFC 5869 (T(1) = HMAC(PRK, info | 0x01))
     stretched = hmac.new(master, b"enc\x01", hashlib.sha256).digest() + hmac.new(master, b"mac\x01", hashlib.sha256).digest()
 
@@ -91,13 +100,13 @@ def build_snapshot(password, email, iterations=5000):
     return {
         "format": "vaultwarden-encrypted-snapshot", "version": 1, "createdUtc": "2026-11-12T00:00:00Z",
         "server": "https://vault.example", "email": email,
-        "prelogin": {"kdf": 0, "kdfIterations": iterations, "kdfMemory": None, "kdfParallelism": None},
+        "prelogin": {"kdf": kdf_type, "kdfIterations": iterations, "kdfMemory": memory, "kdfParallelism": parallelism},
         "sync": {
             "profile": {"id": "11111111-2222-3333-4444-555555555555", "email": email, "key": enc2(user_key, stretched), "privateKey": enc2(pkcs8, user_key),
                         "organizations": [{"id": "o1", "name": "Family", "key": org_key_enc, "status": 2},
                                           {"id": "o2", "name": "Invited only", "key": org_key_enc, "status": 0}]},
             "userDecryption": {"masterPasswordUnlock": {
-                "kdf": {"iterations": iterations, "kdfType": 0, "memory": None, "parallelism": None},
+                "kdf": {"iterations": iterations, "kdfType": kdf_type, "memory": memory, "parallelism": parallelism},
                 "masterKeyWrappedUserKey": enc2(user_key, stretched), "salt": email}},
             "folders": [{"id": "f1", "name": enc2s("Work ä", user_key)}],
             "ciphers": ciphers,
@@ -261,6 +270,22 @@ def test_damaged_data_is_detected():
         assert "MAC" in str(exc)
         return
     raise AssertionError("a modified value was accepted")
+
+
+def test_argon2id_account():
+    try:
+        import argon2  # noqa: F401
+    except ImportError:
+        print("     (argon2-cffi is not installed: Argon2id is not tested)")
+        return
+    snap, _ = build_snapshot("correct horse", "Alice@Example.com", argon2=True)
+    vault, _orgs = ref.decrypt_snapshot(snap, "correct horse")
+    assert len(vault["items"]) == 6
+    try:
+        ref.decrypt_snapshot(snap, "wrong")
+    except ref.WrongPassword:
+        return
+    raise AssertionError("a wrong password was accepted")
 
 
 def test_value_without_mac_is_rejected():
