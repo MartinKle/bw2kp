@@ -16,13 +16,26 @@ namespace VaultwardenSync
         private BackgroundWorker _worker;
         private string _syncPassword;
         private SyncEngine _engine;
+        private SnapshotSource _snapshotSource;
         private bool _busy;
+        private bool _snapshotMode;
+        private readonly bool _startWithSnapshot;
 
         /// <summary>True if the sync (or saving the settings) changed the database.</summary>
         public bool DatabaseModified { get; private set; }
 
         /// <summary>True if a sync ran to completion.</summary>
         public bool SyncSucceeded { get; private set; }
+
+        private Label lblSource;
+        private ComboBox cmbSource;
+
+        // Snapshot source (stage 2)
+        private Panel pnlSnapshot;
+        private Label lblSnapshot;
+        private TextBox txtSnapshotPath;
+        private Button btnBrowseSnapshot;
+        private Label lblSnapshotHint;
 
         private Label lblServerUrl;
         private TextBox txtServerUrl;
@@ -57,12 +70,18 @@ namespace VaultwardenSync
         private TextBox txtLog;
 
         public SyncDialog(SyncConfiguration config, PwDatabase database)
+            : this(config, database, false)
+        {
+        }
+
+        public SyncDialog(SyncConfiguration config, PwDatabase database, bool startWithSnapshot)
         {
             if (config == null) throw new ArgumentNullException("config");
             if (database == null) throw new ArgumentNullException("database");
             
             _config = config;
             _database = database;
+            _startWithSnapshot = startWithSnapshot;
             
             InitializeComponent();
             LoadConfigValues();
@@ -71,13 +90,43 @@ namespace VaultwardenSync
         private void InitializeComponent()
         {
             this.Text = "Vaultwarden Sync Options";
-            this.Size = new Size(500, 600);
+            this.Size = new Size(500, 640);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.StartPosition = FormStartPosition.CenterParent;
 
             int currentY = 15;
+
+            // Source: live from the server, or an encrypted snapshot file
+            lblSource = new Label { Text = "Source:", Location = new Point(15, currentY + 3), Size = new Size(120, 20) };
+            cmbSource = new ComboBox { Location = new Point(140, currentY), Size = new Size(320, 21), DropDownStyle = ComboBoxStyle.DropDownList };
+            cmbSource.Items.Add("Live from the server (Bitwarden CLI)");
+            cmbSource.Items.Add("Encrypted snapshot file (backup)");
+            cmbSource.SelectedIndexChanged += CmbSource_SelectedIndexChanged;
+            this.Controls.Add(lblSource);
+            this.Controls.Add(cmbSource);
+
+            currentY += 30;
+
+            // Snapshot panel: takes the place of the server and login controls
+            pnlSnapshot = new Panel { Location = new Point(15, currentY), Size = new Size(445, 150), Visible = false };
+            lblSnapshot = new Label { Text = "Snapshot file or backup folder:", Location = new Point(0, 3), Size = new Size(300, 20) };
+            txtSnapshotPath = new TextBox { Location = new Point(0, 25), Size = new Size(355, 20) };
+            btnBrowseSnapshot = new Button { Text = "Browse...", Location = new Point(362, 23), Size = new Size(80, 24) };
+            btnBrowseSnapshot.Click += BtnBrowseSnapshot_Click;
+            lblSnapshotHint = new Label
+            {
+                Text = "Snapshots are created by Backup-Vaultwarden.ps1 and are encrypted. A folder selects its newest snapshot.\r\n\r\n" +
+                       "Only the master password is needed. The data is decrypted on this computer; there is no connection to the server.",
+                Location = new Point(0, 60),
+                Size = new Size(445, 80)
+            };
+            pnlSnapshot.Controls.Add(lblSnapshot);
+            pnlSnapshot.Controls.Add(txtSnapshotPath);
+            pnlSnapshot.Controls.Add(btnBrowseSnapshot);
+            pnlSnapshot.Controls.Add(lblSnapshotHint);
+            this.Controls.Add(pnlSnapshot);
 
             // Server URL
             lblServerUrl = new Label { Text = "Server URL:", Location = new Point(15, currentY), Size = new Size(120, 20) };
@@ -182,6 +231,10 @@ namespace VaultwardenSync
             txtEmail.Text = _config.Email;
             txtTargetGroup.Text = _config.TargetGroupName;
             txtCliPath.Text = _config.CliPath;
+            txtSnapshotPath.Text = _config.SnapshotPath;
+
+            cmbSource.SelectedIndex = (_startWithSnapshot || _config.UseSnapshot) ? 1 : 0;
+            ApplySourceMode();
 
             // Default to whichever config has content
             if (string.IsNullOrEmpty(_config.ClientId) && !string.IsNullOrEmpty(_config.Email))
@@ -191,6 +244,59 @@ namespace VaultwardenSync
             else
             {
                 tabAuth.SelectedTab = tabApiKey;
+            }
+        }
+
+        private void CmbSource_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            ApplySourceMode();
+        }
+
+        private void ApplySourceMode()
+        {
+            _snapshotMode = (cmbSource.SelectedIndex == 1);
+            bool live = !_snapshotMode;
+
+            lblServerUrl.Visible = live;
+            txtServerUrl.Visible = live;
+            tabAuth.Visible = live;
+            lblCliPath.Visible = live;
+            txtCliPath.Visible = live;
+            btnBrowseCli.Visible = live;
+            pnlSnapshot.Visible = _snapshotMode;
+
+            btnSync.Text = _snapshotMode ? "Import" : "Synchronize";
+            this.Text = _snapshotMode ? "Import Vaultwarden Snapshot" : "Vaultwarden Sync Options";
+        }
+
+        private void BtnBrowseSnapshot_Click(object sender, EventArgs e)
+        {
+            using (var openFileDialog = new OpenFileDialog())
+            {
+                openFileDialog.Filter = "Vaultwarden snapshot (*.json)|*.json|All Files (*.*)|*.*";
+                openFileDialog.Title = "Select an encrypted Vaultwarden snapshot";
+
+                string current = txtSnapshotPath.Text.Trim().Trim('"');
+                try
+                {
+                    if (System.IO.Directory.Exists(current))
+                    {
+                        openFileDialog.InitialDirectory = current;
+                    }
+                    else if (current.Length > 0 && System.IO.Directory.Exists(System.IO.Path.GetDirectoryName(current)))
+                    {
+                        openFileDialog.InitialDirectory = System.IO.Path.GetDirectoryName(current);
+                    }
+                }
+                catch (Exception)
+                {
+                    // An unusable path in the text box only means no start folder
+                }
+
+                if (openFileDialog.ShowDialog() == DialogResult.OK)
+                {
+                    txtSnapshotPath.Text = openFileDialog.FileName;
+                }
             }
         }
 
@@ -222,21 +328,28 @@ namespace VaultwardenSync
 
         private void SaveConfigValues()
         {
-            _config.ServerUrl = txtServerUrl.Text.Trim();
             _config.TargetGroupName = txtTargetGroup.Text.Trim();
-            _config.CliPath = txtCliPath.Text.Trim();
+            _config.SnapshotPath = txtSnapshotPath.Text.Trim();
+            _config.UseSnapshot = _snapshotMode;
 
-            if (tabAuth.SelectedTab == tabApiKey)
+            // The server and login settings are only touched when they are used
+            if (!_snapshotMode)
             {
-                _config.ClientId = txtClientId.Text.Trim();
-                _config.ClientSecret = txtClientSecret.Text;
-                _config.Email = string.Empty; // Wipe email to avoid confusion
-            }
-            else
-            {
-                _config.Email = txtEmail.Text.Trim();
-                _config.ClientId = string.Empty; // Wipe API keys to avoid confusion
-                _config.ClientSecret = string.Empty;
+                _config.ServerUrl = txtServerUrl.Text.Trim();
+                _config.CliPath = txtCliPath.Text.Trim();
+
+                if (tabAuth.SelectedTab == tabApiKey)
+                {
+                    _config.ClientId = txtClientId.Text.Trim();
+                    _config.ClientSecret = txtClientSecret.Text;
+                    _config.Email = string.Empty; // Wipe email to avoid confusion
+                }
+                else
+                {
+                    _config.Email = txtEmail.Text.Trim();
+                    _config.ClientId = string.Empty; // Wipe API keys to avoid confusion
+                    _config.ClientSecret = string.Empty;
+                }
             }
 
             if (chkSaveConfig.Checked)
@@ -267,26 +380,41 @@ namespace VaultwardenSync
             // Validation
             if (_busy) return;
 
-            if (!SyncConfiguration.IsValidServerUrl(txtServerUrl.Text.Trim()))
+            if (_snapshotMode)
             {
-                MessageBox.Show("Please enter the Vaultwarden Server URL as a full address, e.g. https://vault.example.com.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            if (tabAuth.SelectedTab == tabApiKey)
-            {
-                if (string.IsNullOrEmpty(txtClientId.Text) || string.IsNullOrEmpty(txtClientSecret.Text))
+                try
                 {
-                    MessageBox.Show("Please enter both API Client ID and Client Secret.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    SnapshotSource.ResolvePath(txtSnapshotPath.Text);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.Message, "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
             }
             else
             {
-                if (!SyncConfiguration.IsValidEmail(txtEmail.Text.Trim()))
+                if (!SyncConfiguration.IsValidServerUrl(txtServerUrl.Text.Trim()))
                 {
-                    MessageBox.Show("Please enter a valid Vaultwarden Email address.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show("Please enter the Vaultwarden Server URL as a full address, e.g. https://vault.example.com.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
+                }
+
+                if (tabAuth.SelectedTab == tabApiKey)
+                {
+                    if (string.IsNullOrEmpty(txtClientId.Text) || string.IsNullOrEmpty(txtClientSecret.Text))
+                    {
+                        MessageBox.Show("Please enter both API Client ID and Client Secret.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                }
+                else
+                {
+                    if (!SyncConfiguration.IsValidEmail(txtEmail.Text.Trim()))
+                    {
+                        MessageBox.Show("Please enter a valid Vaultwarden Email address.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
                 }
             }
 
@@ -310,6 +438,13 @@ namespace VaultwardenSync
 
             _engine = new SyncEngine(_config, _database);
             _engine.OnLogMessage += PostLog;
+
+            _snapshotSource = null;
+            if (_snapshotMode)
+            {
+                _snapshotSource = new SnapshotSource(txtSnapshotPath.Text);
+                _snapshotSource.OnLogMessage += PostLog;
+            }
 
             // Disable UI during sync and keep the dialog open until it has finished
             _busy = true;
@@ -345,9 +480,16 @@ namespace VaultwardenSync
 
         private void Worker_DoWork(object sender, DoWorkEventArgs e)
         {
-            // Background thread: only the slow Bitwarden CLI calls run here.
-            // The KeePass database is not touched.
-            e.Result = _engine.FetchVaultData(_syncPassword);
+            // Background thread: only the slow work (Bitwarden CLI calls or decrypting the
+            // snapshot) runs here. The KeePass database is not touched.
+            if (_snapshotSource != null)
+            {
+                e.Result = _snapshotSource.Decrypt(_syncPassword);
+            }
+            else
+            {
+                e.Result = _engine.FetchVaultData(_syncPassword);
+            }
         }
 
         private void Worker_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
@@ -378,13 +520,17 @@ namespace VaultwardenSync
             }
 
             _engine = null;
+            _snapshotSource = null;
             _busy = false;
             ToggleUi(true);
 
             if (error != null)
             {
                 AppendLog("ERROR: " + error.Message);
-                MessageBox.Show("Synchronization failed:\n" + error.Message, "Sync Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(
+                    (_snapshotMode ? "Import failed:\n" : "Synchronization failed:\n") + error.Message,
+                    _snapshotMode ? "Import Failed" : "Sync Failed",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
@@ -393,9 +539,9 @@ namespace VaultwardenSync
 
             MessageBox.Show(
                 string.Format(
-                    "Vaultwarden synchronization completed successfully!\n\n{0} added, {1} updated, {2} moved, {3} removed, {4} unchanged, {5} skipped (unsupported type).",
+                    (_snapshotMode ? "Snapshot import completed successfully!" : "Vaultwarden synchronization completed successfully!") + "\n\n{0} added, {1} updated, {2} moved, {3} removed, {4} unchanged, {5} skipped (unsupported type).",
                     result.Added, result.Updated, result.Moved, result.Removed, result.Unchanged, result.Skipped),
-                "Sync Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                _snapshotMode ? "Import Success" : "Sync Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
             this.DialogResult = DialogResult.OK;
             this.Close();
         }
@@ -407,6 +553,8 @@ namespace VaultwardenSync
 
         private void ToggleUi(bool enabled)
         {
+            cmbSource.Enabled = enabled;
+            pnlSnapshot.Enabled = enabled;
             txtServerUrl.Enabled = enabled;
             tabAuth.Enabled = enabled;
             txtMasterPassword.Enabled = enabled;

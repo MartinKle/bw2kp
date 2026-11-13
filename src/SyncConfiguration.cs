@@ -12,6 +12,9 @@ namespace VaultwardenSync
 
         public const string ConfigEntryTitle = "Vaultwarden Sync Configuration";
         private const string CliPathConfigKey = "VaultwardenSync.CliPath";
+        private const string SnapshotPathConfigKey = "VaultwardenSync.SnapshotPath";
+        private const string SourceConfigKey = "VaultwardenSync.Source";
+        private const string SourceSnapshot = "snapshot";
 
         public string ServerUrl { get; set; }
         public string Email { get; set; }
@@ -19,6 +22,12 @@ namespace VaultwardenSync
         public string ClientSecret { get; set; }
         public string TargetGroupName { get; set; }
         public string CliPath { get; set; }
+
+        /// <summary>Snapshot file, or the backup folder (its newest snapshot is used). Local to this computer.</summary>
+        public string SnapshotPath { get; set; }
+
+        /// <summary>True if the last run imported a snapshot instead of syncing live. Local to this computer.</summary>
+        public bool UseSnapshot { get; set; }
 
         public SyncConfiguration(IPluginHost host, PwDatabase database)
         {
@@ -34,6 +43,9 @@ namespace VaultwardenSync
             ClientSecret = string.Empty;
             TargetGroupName = "Vaultwarden Sync";
             CliPath = "bw.exe";
+            SnapshotPath = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "VaultwardenBackups");
+            UseSnapshot = false;
         }
 
         private PwEntry FindConfigEntry()
@@ -91,6 +103,8 @@ namespace VaultwardenSync
             // master password. It is therefore kept in the local KeePass configuration and
             // deliberately not read from the database, which may come from somewhere else.
             CliPath = _host.CustomConfig.GetString(CliPathConfigKey, CliPath);
+            SnapshotPath = _host.CustomConfig.GetString(SnapshotPathConfigKey, SnapshotPath);
+            UseSnapshot = (_host.CustomConfig.GetString(SourceConfigKey, string.Empty) == SourceSnapshot);
         }
 
         /// <summary>
@@ -99,6 +113,8 @@ namespace VaultwardenSync
         public bool Save()
         {
             _host.CustomConfig.SetString(CliPathConfigKey, CliPath ?? string.Empty);
+            _host.CustomConfig.SetString(SnapshotPathConfigKey, SnapshotPath ?? string.Empty);
+            _host.CustomConfig.SetString(SourceConfigKey, UseSnapshot ? SourceSnapshot : "live");
 
             PwEntry entry = FindConfigEntry();
             bool isNew = false;

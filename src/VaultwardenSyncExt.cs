@@ -8,6 +8,7 @@ namespace VaultwardenSync
     {
         private IPluginHost m_host = null;
         private ToolStripMenuItem m_menuItem = null;
+        private ToolStripMenuItem m_importMenuItem = null;
 
         public override bool Initialize(IPluginHost host)
         {
@@ -19,10 +20,25 @@ namespace VaultwardenSync
             m_menuItem.Click += OnSyncMenuClicked;
             m_host.MainWindow.ToolsMenu.DropDownItems.Add(m_menuItem);
 
+            // Stage 2: import an encrypted snapshot written by the backup script
+            m_importMenuItem = new ToolStripMenuItem("Import Vaultwarden snapshot...");
+            m_importMenuItem.Click += OnImportMenuClicked;
+            m_host.MainWindow.ToolsMenu.DropDownItems.Add(m_importMenuItem);
+
             return true;
         }
 
         private void OnSyncMenuClicked(object sender, EventArgs e)
+        {
+            OpenDialog(false);
+        }
+
+        private void OnImportMenuClicked(object sender, EventArgs e)
+        {
+            OpenDialog(true);
+        }
+
+        private void OpenDialog(bool snapshot)
         {
             if (m_host.Database == null || !m_host.Database.IsOpen)
             {
@@ -37,7 +53,7 @@ namespace VaultwardenSync
             var config = new SyncConfiguration(m_host, m_host.Database);
             config.Load();
 
-            using (var dialog = new SyncDialog(config, m_host.Database))
+            using (var dialog = new SyncDialog(config, m_host.Database, snapshot))
             {
                 dialog.ShowDialog(m_host.MainWindow);
 
@@ -58,6 +74,13 @@ namespace VaultwardenSync
 
         public override void Terminate()
         {
+            if (m_importMenuItem != null)
+            {
+                m_host.MainWindow.ToolsMenu.DropDownItems.Remove(m_importMenuItem);
+                m_importMenuItem.Dispose();
+                m_importMenuItem = null;
+            }
+
             if (m_menuItem != null)
             {
                 m_host.MainWindow.ToolsMenu.DropDownItems.Remove(m_menuItem);

@@ -24,6 +24,8 @@
     <Compile Include="src\VaultwardenSyncExt.cs" />
     <Compile Include="src\SyncConfiguration.cs" />
     <Compile Include="src\SyncEngine.cs" />
+    <Compile Include="src\VaultCrypto.cs" />
+    <Compile Include="src\SnapshotSource.cs" />
     <Compile Include="src\SyncDialog.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

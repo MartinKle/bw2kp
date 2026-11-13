@@ -11,9 +11,20 @@ A lightweight KeePass 2.x plugin that enables one-way synchronization from Vault
 - **Auto-Save:** Automatically saves your KeePass database after a successful sync.
 - **Zero Heavy Dependencies:** Written in C# 5 targeting .NET Framework 4.8. Uses native `DataContractJsonSerializer` instead of bulky 3rd party libraries, keeping the plugin size at just ~32 KB.
 
+## Two stages: backup and import
+
+Besides the live sync, the work can be split in two, so that the master password is only needed when you actually import:
+
+1. **Backup (stage 1, no master password):** `backup\Backup-Vaultwarden.ps1` downloads an *encrypted* snapshot with the API key only. It can run as a scheduled Windows task. See [backup/README.md](backup/README.md).
+2. **Import (stage 2):** **Tools > Import Vaultwarden snapshot...** reads a snapshot, decrypts it on your computer with the master password and merges it into KeePass, with the same rules as the live sync (history, recycle bin, your own fields kept). No server connection and no Bitwarden CLI are needed. A folder as source selects its newest snapshot.
+
+Stage 2 supports accounts with PBKDF2-SHA256 (the Bitwarden default). Accounts that use Argon2id are not supported yet and get a clear error message.
+
+`tools\decrypt_snapshot.py` does the same in Python. Use it to check a snapshot, or as a restore path that needs neither KeePass nor the plugin: `--out vault.json` writes a Bitwarden JSON file that KeePassXC can import (it contains all passwords in plain text, delete it afterwards). `python tests\test_reference.py` runs its tests.
+
 ## Requirements
 1. **KeePass 2.x**
-2. **Bitwarden CLI (`bw.exe`)**
+2. **Bitwarden CLI (`bw.exe`)** (only for the live sync, not for importing snapshots)
    - You must have the Bitwarden command-line tool installed.
    - You can install it via WinGet: `winget install Bitwarden.CLI`
 3. **.NET Framework 4.8** (Standard on modern Windows)
@@ -65,6 +76,7 @@ If you wish to build the plugin yourself:
 This project is licensed under the GNU General Public License v3.0 (GPLv3). See the [LICENSE](LICENSE) file for details.
 
 ## Version History
+- **v0.4.0**: Two-stage mode: encrypted snapshot backup (`backup\`) and import of snapshots into KeePass (Tools > Import Vaultwarden snapshot...); Python reference decryptor and tests.
 - **v0.3.0**: Session key no longer passed on the command line, UTF-8 CLI output, entry history and change detection, custom-field collision handling, Recycle Bin fix, CLI timeout, database updates on the UI thread, separate CLI profile, CLI path stored per computer.
 - **v0.2.0**: Added automatic organization segregation, native DB config storage, deadlock fix, and auto-save.
 - **v0.1.0**: Initial skeleton and build framework.

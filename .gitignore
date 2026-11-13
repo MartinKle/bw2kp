@@ -20,3 +20,5 @@ bin/
 # Encrypted vault snapshots must never be committed
 vaultwarden-snapshot-*.json
 backup.log
+__pycache__/
+*.pyc
