@@ -30,7 +30,13 @@
     Folder for the snapshots. Overrides the folder from the setup.
 
 .PARAMETER Keep
-    Number of snapshots to keep (default 30). 0 keeps all of them.
+    Number of newest snapshots to keep (default 30). 0 keeps all of them.
+
+.PARAMETER KeepWeekly
+    In addition, keep the newest snapshot of this many weeks (default 8).
+
+.PARAMETER KeepMonthly
+    In addition, keep the newest snapshot of this many months (default 12).
 
 .PARAMETER ConfigPath
     Location of the configuration file.
@@ -44,6 +50,8 @@ param(
     [switch]$Setup,
     [string]$OutputDir,
     [int]$Keep = -1,
+    [int]$KeepWeekly = -1,
+    [int]$KeepMonthly = -1,
     [string]$ConfigPath = (Join-Path $env:LOCALAPPDATA 'VaultwardenBackup\config.json'),
     [switch]$AllowHttp
 )
@@ -263,6 +271,51 @@ function Get-BroadFolderAccess {
     return , $found
 }
 
+function Get-SnapshotTime {
+    # UTC time from a snapshot file name, or $null for other names
+    param([string]$Name)
+    $m = [regex]::Match($Name, '^vaultwarden-snapshot-(\d{8})-(\d{6})\.json$')
+    if (-not $m.Success) { return $null }
+    $parsed = [datetime]::MinValue
+    $ok = [datetime]::TryParseExact(($m.Groups[1].Value + $m.Groups[2].Value), 'yyyyMMddHHmmss',
+        [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$parsed)
+    if (-not $ok) { return $null }
+    return $parsed
+}
+
+function Select-SnapshotsToKeep {
+    # Keeps the newest $Keep snapshots, plus the newest one of each of the last
+    # $KeepWeekly weeks and $KeepMonthly months. Files with unknown names are kept.
+    param([string[]]$Names, [int]$Keep, [int]$KeepWeekly, [int]$KeepMonthly)
+
+    $sorted = @($Names | Sort-Object -Descending)
+    $keepSet = @{}
+    $weeks = @{}
+    $months = @{}
+
+    $position = 0
+    foreach ($name in $sorted) {
+        $time = Get-SnapshotTime $name
+        if ($null -eq $time) { $keepSet[$name] = $true; continue }
+
+        if ($position -lt $Keep) { $keepSet[$name] = $true }
+        $position++
+
+        $monday = $time.Date.AddDays(-((([int]$time.DayOfWeek) + 6) % 7))
+        $weekKey = $monday.ToString('yyyyMMdd')
+        $monthKey = $time.ToString('yyyyMM')
+        if ($weeks.Count -lt $KeepWeekly -and -not $weeks.ContainsKey($weekKey)) {
+            $weeks[$weekKey] = $true
+            $keepSet[$name] = $true
+        }
+        if ($months.Count -lt $KeepMonthly -and -not $months.ContainsKey($monthKey)) {
+            $months[$monthKey] = $true
+            $keepSet[$name] = $true
+        }
+    }
+    return , $keepSet
+}
+
 function Read-ConfigFile {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
@@ -314,6 +367,8 @@ if ($Setup) {
         deviceId     = $deviceId
         outputDir    = $out
         keep         = 30
+        keepWeekly   = 8
+        keepMonthly  = 12
     }
     Save-ConfigFile $ConfigPath $config
     if (-not (Test-Path -LiteralPath $out)) { New-Item -ItemType Directory -Path $out -Force | Out-Null }
@@ -356,6 +411,8 @@ if (-not $deviceId) { $deviceId = [guid]::NewGuid().ToString() }
 
 if (-not $OutputDir) { $OutputDir = [string](Get-Prop $cfg 'outputDir' '') }
 if ($Keep -lt 0) { $Keep = [int](Get-Prop $cfg 'keep' 30) }
+if ($KeepWeekly -lt 0) { $KeepWeekly = [int](Get-Prop $cfg 'keepWeekly' 8) }
+if ($KeepMonthly -lt 0) { $KeepMonthly = [int](Get-Prop $cfg 'keepMonthly' 12) }
 
 if (-not $OutputDir) { Write-Host 'No backup folder configured.'; exit 10 }
 if (-not (Test-ServerUrl $server)) { Write-Host 'The configured server URL is invalid (https:// required).'; exit 10 }
@@ -494,6 +551,22 @@ try {
     }
     if ($null -eq $stats) { Stop-Backup 40 'The downloaded data is incomplete (no profile key, items, KDF settings or account e-mail). Nothing was written.' }
 
+    # Compare with the previous snapshot. A vault that suddenly holds far fewer items may
+    # have been emptied by mistake or by someone else: then no older snapshot is deleted.
+    $skipPrune = $false
+    try {
+        $previous = @(Get-ChildItem -LiteralPath $OutputDir -Filter 'vaultwarden-snapshot-*.json' | Where-Object { $null -ne (Get-SnapshotTime $_.Name) } | Sort-Object Name -Descending | Select-Object -First 1)
+        if ($previous.Count -eq 1) {
+            $previousStats = Test-Snapshot ([System.IO.File]::ReadAllText($previous[0].FullName, [System.Text.Encoding]::UTF8))
+            if ($null -ne $previousStats -and $previousStats.Ciphers -ge 10 -and $stats.Ciphers -lt [math]::Floor($previousStats.Ciphers * 0.7)) {
+                $skipPrune = $true
+                Write-Log ('The vault holds far fewer items than in the previous snapshot ({0} instead of {1}). Older snapshots are kept; please check the vault.' -f $stats.Ciphers, $previousStats.Ciphers) 'WARN'
+            }
+        }
+    } catch {
+        # The previous file is unreadable: nothing to compare with
+    }
+
     # 6. Write atomically
     $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
     $finalPath = Join-Path $OutputDir ("vaultwarden-snapshot-$stamp.json")
@@ -514,11 +587,12 @@ try {
     Write-Log ('Snapshot written: {0} ({1} bytes, {2} items, {3} folders, {4} organizations)' -f $finalPath, $size, $stats.Ciphers, $stats.Folders, $stats.Organizations)
     Write-Log "SHA-256: $hash"
 
-    # 7. Delete the oldest snapshots (only after a successful new one)
-    if ($Keep -gt 0) {
-        $all = @(Get-ChildItem -LiteralPath $OutputDir -Filter 'vaultwarden-snapshot-*.json' | Sort-Object Name -Descending)
-        if ($all.Count -gt $Keep) {
-            foreach ($old in ($all | Select-Object -Skip $Keep)) {
+    # 7. Delete old snapshots (only after a successful new one)
+    if ($Keep -gt 0 -and -not $skipPrune) {
+        $all = @(Get-ChildItem -LiteralPath $OutputDir -Filter 'vaultwarden-snapshot-*.json')
+        $keepSet = Select-SnapshotsToKeep -Names @($all | ForEach-Object { $_.Name }) -Keep $Keep -KeepWeekly $KeepWeekly -KeepMonthly $KeepMonthly
+        foreach ($old in ($all | Sort-Object Name)) {
+            if (-not $keepSet.ContainsKey($old.Name)) {
                 Remove-Item -LiteralPath $old.FullName -Force
                 Write-Log "Removed old snapshot: $($old.Name)"
             }

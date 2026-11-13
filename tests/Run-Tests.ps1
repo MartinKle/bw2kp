@@ -145,6 +145,47 @@ print('python: %d items' % len(vault['items']))
         Assert-True ($LASTEXITCODE -eq 0) 'Python tool decrypts the snapshot of the backup script'
     }
 
+    # ---- Retention -----------------------------------------------------------
+    Write-Host ''
+    Write-Host '== Retention =='
+    $retOut = Join-Path $work 'out-retention'
+    New-Item -ItemType Directory -Path $retOut -Force | Out-Null
+    $today = (Get-Date).ToUniversalTime().Date
+    for ($d = 1; $d -le 100; $d++) {
+        $name = 'vaultwarden-snapshot-' + $today.AddDays(-$d).ToString('yyyyMMdd') + '-020000.json'
+        [System.IO.File]::WriteAllText((Join-Path $retOut $name), 'x')
+    }
+    [System.IO.File]::WriteAllText((Join-Path $retOut 'vaultwarden-snapshot-manual-copy.json'), 'x')
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -ConfigPath $cfgPath -AllowHttp -OutputDir $retOut -Keep 3 -KeepWeekly 2 -KeepMonthly 3
+    Assert-True ($LASTEXITCODE -eq 0) 'Backup with retention ends with exit code 0'
+    $left = @(Get-ChildItem -LiteralPath $retOut -Filter 'vaultwarden-snapshot-*.json' | ForEach-Object { $_.Name })
+    Write-Host ('  kept: ' + (($left | Sort-Object) -join ', '))
+    Assert-True ($left.Count -ge 5 -and $left.Count -le 9) "Old snapshots were thinned out ($($left.Count) of 102 left)"
+    $day1 = 'vaultwarden-snapshot-' + $today.AddDays(-1).ToString('yyyyMMdd') + '-020000.json'
+    $day2 = 'vaultwarden-snapshot-' + $today.AddDays(-2).ToString('yyyyMMdd') + '-020000.json'
+    Assert-True (($left -contains $day1) -and ($left -contains $day2)) 'The newest snapshots are kept'
+    $monthEnd = (New-Object datetime($today.Year, $today.Month, 1)).AddMonths(-1).AddDays(-1)
+    $monthName = 'vaultwarden-snapshot-' + $monthEnd.ToString('yyyyMMdd') + '-020000.json'
+    Assert-True ($left -contains $monthName) 'The last snapshot of the month before last is kept'
+    Assert-True ($left -contains 'vaultwarden-snapshot-manual-copy.json') 'A file with an unknown name is never deleted'
+
+    # A vault that suddenly holds far fewer items: nothing is deleted
+    $dropOut = Join-Path $work 'out-drop'
+    $cfgBig = Join-Path $work 'config-big.json'
+    Write-TestConfig $cfgBig "http://127.0.0.1:$Port/big" $dropOut
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -ConfigPath $cfgBig -AllowHttp
+    Assert-True ($LASTEXITCODE -eq 0) 'Backup of the larger vault ends with exit code 0'
+    for ($d = 1; $d -le 5; $d++) {
+        $name = 'vaultwarden-snapshot-' + $today.AddDays(-$d).ToString('yyyyMMdd') + '-020000.json'
+        [System.IO.File]::WriteAllText((Join-Path $dropOut $name), 'x')
+    }
+    Start-Sleep -Seconds 1
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -ConfigPath $cfgPath -AllowHttp -OutputDir $dropOut -Keep 1 -KeepWeekly 0 -KeepMonthly 0
+    Assert-True ($LASTEXITCODE -eq 0) 'Backup of the shrunken vault ends with exit code 0'
+    $leftDrop = @(Get-ChildItem -LiteralPath $dropOut -Filter 'vaultwarden-snapshot-*.json')
+    Assert-True ($leftDrop.Count -eq 7) "No snapshot is deleted when the vault shrank ($($leftDrop.Count) of 7 left)"
+    Assert-True ((Get-Content -LiteralPath (Join-Path $dropOut 'backup.log') -Raw) -match 'far fewer items') 'The log warns about the shrunken vault'
+
     # ---- Failure cases ------------------------------------------------------
     Write-Host ''
     Write-Host '== Failure cases of the backup script =='

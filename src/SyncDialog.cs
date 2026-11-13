@@ -39,7 +39,11 @@ namespace VaultwardenSync
         private Label lblSnapshot;
         private TextBox txtSnapshotPath;
         private Button btnBrowseSnapshot;
+        private Label lblSnapshotInfo;
         private Label lblSnapshotHint;
+
+        // The newest snapshot being older than this suggests that the scheduled backup has stopped
+        private const double BackupStaleWarningDays = 3.0;
 
         private Label lblServerUrl;
         private TextBox txtServerUrl;
@@ -124,9 +128,12 @@ namespace VaultwardenSync
             {
                 Text = "Snapshots are created by Backup-Vaultwarden.ps1 and are encrypted. A folder selects its newest snapshot.\r\n\r\n" +
                        "Only the master password is needed. The data is decrypted on this computer; there is no connection to the server.",
-                Location = new Point(0, 60),
-                Size = new Size(445, 80)
+                Location = new Point(0, 76),
+                Size = new Size(445, 70)
             };
+            lblSnapshotInfo = new Label { Text = string.Empty, Location = new Point(0, 52), Size = new Size(445, 18) };
+            txtSnapshotPath.TextChanged += delegate { UpdateSnapshotInfo(); };
+            pnlSnapshot.Controls.Add(lblSnapshotInfo);
             pnlSnapshot.Controls.Add(lblSnapshot);
             pnlSnapshot.Controls.Add(txtSnapshotPath);
             pnlSnapshot.Controls.Add(btnBrowseSnapshot);
@@ -276,6 +283,52 @@ namespace VaultwardenSync
 
             btnSync.Text = _snapshotMode ? "Import" : "Synchronize";
             this.Text = _snapshotMode ? "Import Vaultwarden Snapshot" : "Vaultwarden Sync Options";
+        }
+
+        /// <summary>
+        /// Shows which snapshot would be used and how old it is. An old newest snapshot
+        /// is the only sign that the scheduled backup has stopped working.
+        /// </summary>
+        private void UpdateSnapshotInfo()
+        {
+            string text = string.Empty;
+            bool warn = false;
+            try
+            {
+                string raw = txtSnapshotPath.Text.Trim().Trim('"');
+                if (raw.Length > 0)
+                {
+                    string file = SnapshotSource.ResolvePath(raw);
+                    string name = System.IO.Path.GetFileName(file);
+                    DateTime? created = SnapshotSource.GetSnapshotTimeUtc(name);
+                    if (created.HasValue)
+                    {
+                        double ageDays = (DateTime.UtcNow - created.Value).TotalDays;
+                        bool isFolder = System.IO.Directory.Exists(raw);
+                        text = string.Format("{0}: {1:yyyy-MM-dd HH:mm} ({2})",
+                            isFolder ? "Newest snapshot" : "Snapshot",
+                            created.Value.ToLocalTime(),
+                            ageDays < 1.0 ? "less than a day old" : ((int)Math.Floor(ageDays)) + " day(s) old");
+                        if (isFolder && ageDays > BackupStaleWarningDays)
+                        {
+                            warn = true;
+                            text += " - is the scheduled backup still running?";
+                        }
+                    }
+                    else
+                    {
+                        text = "Snapshot: " + name;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                text = ex.Message;
+                warn = true;
+            }
+
+            lblSnapshotInfo.Text = text;
+            lblSnapshotInfo.ForeColor = warn ? Color.Firebrick : SystemColors.ControlText;
         }
 
         private void BtnBrowseSnapshot_Click(object sender, EventArgs e)

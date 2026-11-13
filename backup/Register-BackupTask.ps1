@@ -20,6 +20,8 @@ param(
     [string]$TaskName = 'Vaultwarden Backup',
     [string]$OutputDir,
     [int]$Keep = -1,
+    [int]$KeepWeekly = -1,
+    [int]$KeepMonthly = -1,
     [string]$ConfigPath,
     [switch]$Unregister
 )
@@ -45,6 +47,8 @@ if (-not (Test-Path -LiteralPath $script)) {
 $arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $script
 if ($OutputDir)  { $arguments += ' -OutputDir "{0}"' -f $OutputDir }
 if ($Keep -ge 0) { $arguments += ' -Keep {0}' -f $Keep }
+if ($KeepWeekly -ge 0) { $arguments += ' -KeepWeekly {0}' -f $KeepWeekly }
+if ($KeepMonthly -ge 0) { $arguments += ' -KeepMonthly {0}' -f $KeepMonthly }
 if ($ConfigPath) { $arguments += ' -ConfigPath "{0}"' -f $ConfigPath }
 
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments

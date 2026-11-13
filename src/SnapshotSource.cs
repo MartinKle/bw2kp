@@ -225,15 +225,24 @@ namespace VaultwardenSync
 
             if (Directory.Exists(path))
             {
+                // The names contain a UTC timestamp, so the newest one sorts last. Files that
+                // match the pattern but carry no timestamp (manual copies) are only used if
+                // there is nothing else.
                 string newest = null;
+                string newestOther = null;
                 foreach (string file in Directory.GetFiles(path, SnapshotFilePattern))
                 {
-                    // The names contain a UTC timestamp, so the newest one sorts last
-                    if (newest == null || string.CompareOrdinal(Path.GetFileName(file), Path.GetFileName(newest)) > 0)
+                    string name = Path.GetFileName(file);
+                    if (GetSnapshotTimeUtc(name).HasValue)
                     {
-                        newest = file;
+                        if (newest == null || string.CompareOrdinal(name, Path.GetFileName(newest)) > 0) newest = file;
+                    }
+                    else
+                    {
+                        if (newestOther == null || string.CompareOrdinal(name, Path.GetFileName(newestOther)) > 0) newestOther = file;
                     }
                 }
+                if (newest == null) newest = newestOther;
                 if (newest == null)
                 {
                     throw new FileNotFoundException("The folder does not contain a " + SnapshotFilePattern + " file.");
@@ -243,6 +252,29 @@ namespace VaultwardenSync
 
             if (!File.Exists(path)) throw new FileNotFoundException("The snapshot file was not found: " + path);
             return path;
+        }
+
+        /// <summary>
+        /// The UTC time in a snapshot file name (vaultwarden-snapshot-yyyyMMdd-HHmmss.json), or null.
+        /// </summary>
+        public static DateTime? GetSnapshotTimeUtc(string fileName)
+        {
+            const string prefix = "vaultwarden-snapshot-";
+            const string suffix = ".json";
+            if (fileName == null || !fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                || !fileName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            string stamp = fileName.Substring(prefix.Length, fileName.Length - prefix.Length - suffix.Length);
+            DateTime parsed;
+            if (!DateTime.TryParseExact(stamp, "yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out parsed))
+            {
+                return null;
+            }
+            return parsed;
         }
 
         private static SnapDocument ReadDocument(string file)

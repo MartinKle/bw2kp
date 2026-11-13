@@ -42,16 +42,29 @@ class Handler(BaseHTTPRequestHandler):
     def _body(self):
         return self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode("utf-8")
 
+    def _route(self):
+        # "/big/..." serves the same account with twice as many items
+        if self.path.startswith("/big/"):
+            self.path = self.path[4:]
+            return True
+        return False
+
     def do_GET(self):
+        big = self._route()
         if self.path.startswith("/api/sync"):
             if self.headers.get("Authorization") != "Bearer " + TOKEN:
                 return self._send(401, '{"message":"Unauthorized"}')
+            if big:
+                sync = json.loads(load(os.path.join("server", "sync.json")).decode("utf-8"))
+                sync["ciphers"] = sync["ciphers"] * 2
+                return self._send(200, json.dumps(sync))
             return self._send(200, load(os.path.join("server", "sync.json")))
         if self.path == "/alive":
             return self._send(200, "{}")
         self._send(404, '{"message":"Not found"}')
 
     def do_POST(self):
+        self._route()
         body = self._body()
         if self.path == "/identity/connect/token":
             form = urllib.parse.parse_qs(body)

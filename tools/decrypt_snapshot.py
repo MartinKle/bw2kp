@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 
 from cryptography.hazmat.primitives import hashes, padding as sympadding, serialization
@@ -131,6 +132,9 @@ def decrypt_rsa(value, pkcs8_der):
 def resolve(path):
     if os.path.isdir(path):
         files = sorted(glob.glob(os.path.join(path, "vaultwarden-snapshot-*.json")))
+        # Prefer names with a timestamp; manual copies only if there is nothing else
+        stamped = [f for f in files if re.match(r"vaultwarden-snapshot-\d{8}-\d{6}\.json$", os.path.basename(f))]
+        files = stamped or files
         if not files:
             sys.exit("No vaultwarden-snapshot-*.json in " + path)
         return files[-1]
@@ -211,6 +215,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("snapshot", help="snapshot file, or the backup folder (newest snapshot)")
     ap.add_argument("--out", help="write unencrypted Bitwarden JSON to this file")
+    ap.add_argument("--yes", action="store_true", help="do not ask before writing the unencrypted file")
     args = ap.parse_args()
 
     path = resolve(args.snapshot)
@@ -227,6 +232,11 @@ def main():
         kinds[it["type"]] = kinds.get(it["type"], 0) + 1
     print("OK: %d items %s, %d folders, %d organizations" % (len(vault["items"]), kinds, len(vault["folders"]), len(orgs)))
     if args.out:
+        if not args.yes:
+            print("\n%s will contain ALL passwords in plain text. File permissions do not protect it on Windows,"
+                  "\nand deleting it later does not wipe it from the disk. Prefer an encrypted drive." % args.out)
+            if input("Type YES to write it: ").strip() != "YES":
+                sys.exit("Nothing was written.")
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
         with os.fdopen(os.open(args.out, flags, 0o600), "w", encoding="utf-8") as fh:
             json.dump(vault, fh, ensure_ascii=False, indent=1)
