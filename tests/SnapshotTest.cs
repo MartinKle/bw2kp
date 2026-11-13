@@ -44,6 +44,7 @@ public static class SnapshotTest
         Run("Wrong master password is reported", delegate { TestWrongPassword(snapshotPath, password); });
         Run("Modified value is detected", delegate { TestTamper(snapshotPath, password); });
         Run("Implausible iteration count is rejected", delegate { TestIterations(snapshotPath, password); });
+        Run("Merge into a KeePass database (preview, import, update, removal, other account)", delegate { MergeTest.Scenario(snapshotPath, password); });
 
         Console.WriteLine(_failed == 0 ? "ALL TESTS PASSED" : (_failed + " TEST(S) FAILED"));
         return _failed == 0 ? 0 : 1;

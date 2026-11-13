@@ -60,7 +60,8 @@ try {
         '/nologo', '/target:exe', "/out:$testExe",
         "/reference:$dll", "/reference:$keePassExe",
         '/reference:System.Web.Extensions.dll', '/reference:System.Core.dll',
-        (Join-Path $repo 'tests\SnapshotTest.cs')
+        (Join-Path $repo 'tests\SnapshotTest.cs'),
+        (Join-Path $repo 'tests\MergeTest.cs')
     )
     & $csc $cscArgs
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $testExe)) { throw "Compiling SnapshotTest.cs failed." }
