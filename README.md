@@ -26,7 +26,7 @@ The snapshot way is recommended: a small PowerShell script downloads an **encryp
 1. **Windows** with **KeePass 2.x** and .NET Framework 4.8 (standard on modern Windows).
 2. **Snapshot way:** nothing else. Windows PowerShell 5.1 is preinstalled.
 3. **Live sync only:** Bitwarden CLI (`winget install Bitwarden.CLI`).
-4. An account with the default **PBKDF2-SHA256** KDF. Argon2id works for the live sync, but not yet for importing snapshots.
+4. Accounts with **PBKDF2-SHA256** or **Argon2id** are supported (Argon2id needs KeePass 2.49 or newer).
 
 ## Installation
 
@@ -106,10 +106,20 @@ Needs only the .NET Framework compiler (`csc.exe`) that ships with Windows.
 2. Run `.\build_full.ps1 -KeePassDir "C:\path\to\KeePass"` (the folder containing `KeePass.exe`).
 3. The script stops KeePass, compiles `VaultwardenSync.dll` into the repository folder and copies it to `<KeePassDir>\Plugins`.
 
+## Tests
+Every push is built and tested on GitHub (`.github/workflows/ci.yml`). To run the same tests locally (needs Python 3 with `pip install cryptography argon2-cffi`):
+```powershell
+python tests\test_reference.py     # Python reference decryptor
+.\build_full.ps1 -KeePassDir "C:\path\to\KeePass"
+.\tests\Run-Tests.ps1 -KeePassDir "C:\path\to\KeePass"
+```
+`Run-Tests.ps1` checks the C# decryption (PBKDF2 and Argon2id), the merge into an in-memory KeePass database, and a complete run: the backup script downloads from a local mock server, and the snapshot it wrote is decrypted by the plugin code and by the Python tool. It only writes to a temporary folder.
+
 ## License
 This project is licensed under the GNU General Public License v3.0 (GPLv3). See the [LICENSE](LICENSE) file for details.
 
 ## Version History
+- **v0.6.0**: Argon2id accounts can be imported; snapshots are kept by day, week and month, and nothing is deleted when the vault suddenly shrank; the import dialog shows the age of the newest snapshot; the Python tool asks before writing plain text; automated tests and CI.
 - **v0.5.0**: Import shows a summary and asks before writing; "Check only" mode; warnings for old snapshots and mass removals; a target group is bound to one account; the backup warns about a backup folder that other users can read; security notes extended.
 - **v0.4.1**: Hardening after the security review: the backup reads the account e-mail from the profile (an identity item could be picked up before), no HTTP redirects are followed, values without MAC are rejected under keys that have one, and the PBKDF2 iteration count of a snapshot must be plausible.
 - **v0.4.0**: Two-stage mode (snapshot is the recommended way, the live sync stays available): encrypted snapshot backup (`backup\`) and import of snapshots into KeePass (Tools > Import Vaultwarden snapshot...); Python reference decryptor and tests.

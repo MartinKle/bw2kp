@@ -21,7 +21,7 @@ The API key is in the web vault under **Settings > Security > Keys > View API ke
 2. Downloads the encrypted vault (`/api/sync`) and the KDF settings of the account (`prelogin`).
 3. Checks that the data is complete (profile key, items, KDF settings). If not, **nothing is written**.
 4. Writes `vaultwarden-snapshot-<UTC timestamp>.json` atomically (temporary file, then rename).
-5. Deletes the oldest snapshots, keeping 30 by default (`-Keep`). Only after a successful new one.
+5. Thins out old snapshots, only after a successful new one. Kept are the newest 30 (`-Keep`), plus the newest snapshot of each of the last 8 weeks (`-KeepWeekly`) and 12 months (`-KeepMonthly`). If the vault holds far fewer items than in the previous snapshot (less than 70 %), nothing is deleted and the log shows a warning, so that an emptied vault cannot push out the good backups. Files whose names carry no timestamp are never deleted.
 6. Appends to `backup.log` in the backup folder (no secrets) and ends with an exit code: `0` success, `1` unexpected error, `10` configuration, `20` login, `30` download, `40` verification or write.
 
 ## Scheduled task
