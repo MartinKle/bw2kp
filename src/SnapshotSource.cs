@@ -331,6 +331,20 @@ namespace VaultwardenSync
             Log("Reading snapshot: " + file);
             SnapDocument doc = ReadDocument(file);
             Log(string.Format("Snapshot of {0} created {1} (UTC).", doc.server, doc.createdUtc));
+            return DecryptDocument(doc, masterPassword);
+        }
+
+        /// <summary>
+        /// Decrypts vault data that is already in memory: a snapshot that was read from a file,
+        /// or the data the live sync has just downloaded.
+        /// </summary>
+        public VaultData DecryptDocument(SnapDocument doc, string masterPassword)
+        {
+            if (doc == null || doc.sync == null || doc.sync.profile == null || doc.sync.ciphers == null)
+            {
+                throw new InvalidDataException("The vault data is incomplete (no profile or items).");
+            }
+            if (string.IsNullOrEmpty(masterPassword)) throw new ArgumentException("The master password is empty.", "masterPassword");
 
             SnapProfile profile = doc.sync.profile;
             SnapMasterPasswordUnlock unlock = null;

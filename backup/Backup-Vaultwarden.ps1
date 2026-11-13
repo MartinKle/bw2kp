@@ -41,6 +41,9 @@
 .PARAMETER ConfigPath
     Location of the configuration file.
 
+.PARAMETER NoNotification
+    Do not show a Windows notification when the backup fails.
+
 .PARAMETER AllowHttp
     Allows plain http:// server URLs. Only for tests: the API secret and the
     vault would travel unprotected.
@@ -53,7 +56,8 @@ param(
     [int]$KeepWeekly = -1,
     [int]$KeepMonthly = -1,
     [string]$ConfigPath = (Join-Path $env:LOCALAPPDATA 'VaultwardenBackup\config.json'),
-    [switch]$AllowHttp
+    [switch]$AllowHttp,
+    [switch]$NoNotification
 )
 
 Set-StrictMode -Version 2.0
@@ -80,10 +84,41 @@ function Write-Log {
     }
 }
 
+function Show-Notification {
+    # Windows notification (toast) in the session of the logged-on user. It also stays in
+    # the notification center. Failing to show it must never change the result of the backup.
+    param([string]$Title, [string]$Text)
+    if ($NoNotification) { return }
+    try {
+        $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+        $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+        if ($Text.Length -gt 300) { $Text = $Text.Substring(0, 300) + '...' }
+        $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+        $xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>' +
+            [System.Security.SecurityElement]::Escape($Title) + '</text><text>' +
+            [System.Security.SecurityElement]::Escape($Text) + '</text></binding></visual></toast>')
+        $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+        # Shown under the name of Windows PowerShell, which is registered for notifications
+        $appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)
+    } catch {
+        Write-Log ('The Windows notification could not be shown: ' + $_.Exception.Message) 'WARN'
+    }
+}
+
 function Stop-Backup {
     param([int]$Code, [string]$Message)
     Write-Log $Message 'ERROR'
+    Show-Notification 'Vaultwarden backup failed' $Message
     exit $Code
+}
+
+function Stop-Config {
+    # Configuration problems are found before the log file is known
+    param([string]$Message)
+    Write-Host $Message
+    Show-Notification 'Vaultwarden backup failed' $Message
+    exit 10
 }
 
 function Get-Prop {
@@ -395,12 +430,10 @@ if ($Setup) {
 try {
     $cfg = Read-ConfigFile $ConfigPath
 } catch {
-    Write-Host ('Cannot read the configuration: ' + $_.Exception.Message)
-    exit 10
+    Stop-Config ('Cannot read the configuration: ' + $_.Exception.Message)
 }
 if ($null -eq $cfg) {
-    Write-Host "No configuration found at $ConfigPath. Run this script with -Setup first."
-    exit 10
+    Stop-Config "No configuration found at $ConfigPath. Run this script with -Setup first."
 }
 
 $server = ([string](Get-Prop $cfg 'serverUrl' '')).TrimEnd('/')
@@ -414,15 +447,14 @@ if ($Keep -lt 0) { $Keep = [int](Get-Prop $cfg 'keep' 30) }
 if ($KeepWeekly -lt 0) { $KeepWeekly = [int](Get-Prop $cfg 'keepWeekly' 8) }
 if ($KeepMonthly -lt 0) { $KeepMonthly = [int](Get-Prop $cfg 'keepMonthly' 12) }
 
-if (-not $OutputDir) { Write-Host 'No backup folder configured.'; exit 10 }
-if (-not (Test-ServerUrl $server)) { Write-Host 'The configured server URL is invalid (https:// required).'; exit 10 }
-if (-not $clientId -or -not $secretProtected) { Write-Host 'The API key is missing in the configuration. Run -Setup again.'; exit 10 }
+if (-not $OutputDir) { Stop-Config 'No backup folder configured.' }
+if (-not (Test-ServerUrl $server)) { Stop-Config 'The configured server URL is invalid (https:// required).' }
+if (-not $clientId -or -not $secretProtected) { Stop-Config 'The API key is missing in the configuration. Run -Setup again.' }
 
 try {
     if (-not (Test-Path -LiteralPath $OutputDir)) { New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null }
 } catch {
-    Write-Host ('Cannot create the backup folder: ' + $_.Exception.Message)
-    exit 10
+    Stop-Config ('Cannot create the backup folder: ' + $_.Exception.Message)
 }
 
 $script:LogFile = Join-Path $OutputDir 'backup.log'
@@ -560,7 +592,9 @@ try {
             $previousStats = Test-Snapshot ([System.IO.File]::ReadAllText($previous[0].FullName, [System.Text.Encoding]::UTF8))
             if ($null -ne $previousStats -and $previousStats.Ciphers -ge 10 -and $stats.Ciphers -lt [math]::Floor($previousStats.Ciphers * 0.7)) {
                 $skipPrune = $true
-                Write-Log ('The vault holds far fewer items than in the previous snapshot ({0} instead of {1}). Older snapshots are kept; please check the vault.' -f $stats.Ciphers, $previousStats.Ciphers) 'WARN'
+                $shrunk = 'The vault holds far fewer items than in the previous snapshot ({0} instead of {1}). Older snapshots are kept; please check the vault.' -f $stats.Ciphers, $previousStats.Ciphers
+                Write-Log $shrunk 'WARN'
+                Show-Notification 'Vaultwarden backup: please check the vault' $shrunk
             }
         }
     } catch {
@@ -603,5 +637,6 @@ try {
     exit 0
 } catch {
     Write-Log ('Unexpected error: ' + $_.Exception.Message) 'ERROR'
+    Show-Notification 'Vaultwarden backup failed' ('Unexpected error: ' + $_.Exception.Message)
     exit 1
 }

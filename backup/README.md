@@ -24,6 +24,12 @@ The API key is in the web vault under **Settings > Security > Keys > View API ke
 5. Thins out old snapshots, only after a successful new one. Kept are the newest 30 (`-Keep`), plus the newest snapshot of each of the last 8 weeks (`-KeepWeekly`) and 12 months (`-KeepMonthly`). If the vault holds far fewer items than in the previous snapshot (less than 70 %), nothing is deleted and the log shows a warning, so that an emptied vault cannot push out the good backups. Files whose names carry no timestamp are never deleted.
 6. Appends to `backup.log` in the backup folder (no secrets) and ends with an exit code: `0` success, `1` unexpected error, `10` configuration, `20` login, `30` download, `40` verification or write.
 
+## When a backup fails
+
+The script shows a **Windows notification** (it also stays in the notification center) when a run fails, and when the vault suddenly holds far fewer items than before. Details are in `backup.log`. `-NoNotification` turns this off.
+
+A notification cannot tell you that the task did not run at all, for example because it was deleted. For that case the import dialog in KeePass shows the age of the newest snapshot and marks it red when it is older than 3 days.
+
 ## Scheduled task
 
 The task runs as the current user, **only while that user is logged on**. This is on purpose, because DPAPI can only decrypt the secret in the user's own session. If the computer was off at the scheduled time, the task runs as soon as possible afterwards.

@@ -17,9 +17,9 @@ public static class SnapshotTest
 
     public static int Main(string[] args)
     {
-        if (args.Length < 2 || args.Length > 3)
+        if (args.Length < 2 || args.Length > 4)
         {
-            Console.WriteLine("Usage: SnapshotTest.exe <snapshot file or folder> <expected.json> [Argon2id snapshot]");
+            Console.WriteLine("Usage: SnapshotTest.exe <snapshot file or folder> <expected.json> [Argon2id snapshot or -] [URL of the mock server]");
             return 2;
         }
 
@@ -46,7 +46,41 @@ public static class SnapshotTest
         Run("Implausible iteration count is rejected", delegate { TestIterations(snapshotPath, password); });
         Run("Merge into a KeePass database (preview, import, update, removal, other account)", delegate { MergeTest.Scenario(snapshotPath, password); });
 
-        if (args.Length == 3)
+        if (args.Length >= 4)
+        {
+            string url = args[3];
+            Run("Live sync downloads and decrypts the vault", delegate
+            {
+                VaultData live = new LiveSource(url, "user.test-client", "test-secret-123", "test-device").Fetch(password);
+                Compare(live, expected);
+            });
+            Run("Live sync: wrong master password is reported", delegate
+            {
+                try
+                {
+                    new LiveSource(url, "user.test-client", "test-secret-123", "test-device").Fetch(password + "x");
+                }
+                catch (WrongPasswordException)
+                {
+                    return;
+                }
+                throw new Exception("a wrong password was accepted");
+            });
+            Run("Live sync: wrong API secret is reported", delegate
+            {
+                ExpectFailure(new LiveSource(url, "user.test-client", "wrong", "test-device"), password, "Login failed");
+            });
+            Run("Live sync: a redirect is not followed", delegate
+            {
+                ExpectFailure(new LiveSource(url + "/redirect", "user.test-client", "test-secret-123", "test-device"), password, "redirect");
+            });
+            Run("Live sync: http:// is refused for other computers", delegate
+            {
+                ExpectFailure(new LiveSource("http://vault.example.com", "user.test-client", "test-secret-123", "test-device"), password, "https://");
+            });
+        }
+
+        if (args.Length >= 3 && args[2] != "-")
         {
             string argonPath = args[2];
             Run("Argon2id snapshot decrypts to the expected content", delegate { TestDecrypt(argonPath, password, expected); });
@@ -120,9 +154,27 @@ public static class SnapshotTest
         throw new Exception("a value without MAC was accepted");
     }
 
+    private static void ExpectFailure(LiveSource source, string password, string messagePart)
+    {
+        try
+        {
+            source.Fetch(password);
+        }
+        catch (InvalidOperationException ex)
+        {
+            Check(ex.Message.Contains(messagePart), "unexpected message: " + ex.Message);
+            return;
+        }
+        throw new Exception("the request did not fail");
+    }
+
     private static void TestDecrypt(string snapshotPath, string password, Dictionary<string, object> expected)
     {
-        VaultData data = new SnapshotSource(snapshotPath).Decrypt(password);
+        Compare(new SnapshotSource(snapshotPath).Decrypt(password), expected);
+    }
+
+    private static void Compare(VaultData data, Dictionary<string, object> expected)
+    {
 
         CheckEqual(expected["accountId"], data.AccountId, "account id");
         CheckEqual(expected["email"], data.AccountEmail, "account e-mail");

@@ -113,7 +113,7 @@ try {
 
     $cfgPath = Join-Path $work 'config.json'
     Write-TestConfig $cfgPath "http://127.0.0.1:$Port" $outDir
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -ConfigPath $cfgPath -AllowHttp
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -NoNotification -ConfigPath $cfgPath -AllowHttp
     Assert-True ($LASTEXITCODE -eq 0) 'Backup script ends with exit code 0'
 
     $snapshots = @(Get-ChildItem -LiteralPath $outDir -Filter 'vaultwarden-snapshot-*.json' -ErrorAction SilentlyContinue)
@@ -151,6 +151,12 @@ print('python: %d items' % len(vault['items']))
         Assert-True ($LASTEXITCODE -eq 0) 'Python tool decrypts the snapshot of the backup script'
     }
 
+    # ---- Live sync of the plugin against the mock server ---------------------
+    Write-Host ''
+    Write-Host '== Live sync (plugin code) against the mock server =='
+    & $testExe (Join-Path $work 'snapshot') (Join-Path $work 'expected.json') '-' "http://127.0.0.1:$Port"
+    Assert-True ($LASTEXITCODE -eq 0) 'C# tests including the live sync'
+
     # ---- Retention -----------------------------------------------------------
     Write-Host ''
     Write-Host '== Retention =='
@@ -162,7 +168,7 @@ print('python: %d items' % len(vault['items']))
         [System.IO.File]::WriteAllText((Join-Path $retOut $name), 'x')
     }
     [System.IO.File]::WriteAllText((Join-Path $retOut 'vaultwarden-snapshot-manual-copy.json'), 'x')
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -ConfigPath $cfgPath -AllowHttp -OutputDir $retOut -Keep 3 -KeepWeekly 2 -KeepMonthly 3
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -NoNotification -ConfigPath $cfgPath -AllowHttp -OutputDir $retOut -Keep 3 -KeepWeekly 2 -KeepMonthly 3
     Assert-True ($LASTEXITCODE -eq 0) 'Backup with retention ends with exit code 0'
     $left = @(Get-ChildItem -LiteralPath $retOut -Filter 'vaultwarden-snapshot-*.json' | ForEach-Object { $_.Name })
     Write-Host ('  kept: ' + (($left | Sort-Object) -join ', '))
@@ -179,14 +185,14 @@ print('python: %d items' % len(vault['items']))
     $dropOut = Join-Path $work 'out-drop'
     $cfgBig = Join-Path $work 'config-big.json'
     Write-TestConfig $cfgBig "http://127.0.0.1:$Port/big" $dropOut
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -ConfigPath $cfgBig -AllowHttp
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -NoNotification -ConfigPath $cfgBig -AllowHttp
     Assert-True ($LASTEXITCODE -eq 0) 'Backup of the larger vault ends with exit code 0'
     for ($d = 1; $d -le 5; $d++) {
         $name = 'vaultwarden-snapshot-' + $today.AddDays(-$d).ToString('yyyyMMdd') + '-020000.json'
         [System.IO.File]::WriteAllText((Join-Path $dropOut $name), 'x')
     }
     Start-Sleep -Seconds 1
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -ConfigPath $cfgPath -AllowHttp -OutputDir $dropOut -Keep 1 -KeepWeekly 0 -KeepMonthly 0
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -NoNotification -ConfigPath $cfgPath -AllowHttp -OutputDir $dropOut -Keep 1 -KeepWeekly 0 -KeepMonthly 0
     Assert-True ($LASTEXITCODE -eq 0) 'Backup of the shrunken vault ends with exit code 0'
     $leftDrop = @(Get-ChildItem -LiteralPath $dropOut -Filter 'vaultwarden-snapshot-*.json')
     Assert-True ($leftDrop.Count -eq 7) "No snapshot is deleted when the vault shrank ($($leftDrop.Count) of 7 left)"
@@ -198,12 +204,12 @@ print('python: %d items' % len(vault['items']))
     $redirectOut = Join-Path $work 'out-redirect'
     $cfgRedirect = Join-Path $work 'config-redirect.json'
     Write-TestConfig $cfgRedirect "http://127.0.0.1:$Port/redirect" $redirectOut
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -ConfigPath $cfgRedirect -AllowHttp
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -NoNotification -ConfigPath $cfgRedirect -AllowHttp
     Assert-True ($LASTEXITCODE -eq 20) 'A redirect is not followed (exit code 20)'
     Assert-True (@(Get-ChildItem -LiteralPath $redirectOut -Filter 'vaultwarden-snapshot-*.json' -ErrorAction SilentlyContinue).Count -eq 0) 'No snapshot is written after a redirect'
 
     $httpOut = Join-Path $work 'out-http'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -ConfigPath $cfgPath -OutputDir $httpOut
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $backupScript -NoNotification -ConfigPath $cfgPath -OutputDir $httpOut
     Assert-True ($LASTEXITCODE -eq 10) 'http:// is refused without -AllowHttp (exit code 10)'
 
     $secret = ConvertFrom-SecureString (ConvertTo-SecureString 'wrong-secret' -AsPlainText -Force)

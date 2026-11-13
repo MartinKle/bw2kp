@@ -17,6 +17,7 @@ namespace VaultwardenSync
         private string _syncPassword;
         private SyncEngine _engine;
         private SnapshotSource _snapshotSource;
+        private LiveSource _liveSource;
         private bool _busy;
         private bool _snapshotMode;
         private bool _verifyOnly;
@@ -48,9 +49,7 @@ namespace VaultwardenSync
         private Label lblServerUrl;
         private TextBox txtServerUrl;
         
-        private TabControl tabAuth;
-        private TabPage tabApiKey;
-        private TabPage tabEmailPass;
+        private GroupBox grpApiKey;
 
         // API Key Tab Controls
         private Label lblClientId;
@@ -58,18 +57,11 @@ namespace VaultwardenSync
         private Label lblClientSecret;
         private TextBox txtClientSecret;
 
-        // Email/Password Tab Controls
-        private Label lblEmail;
-        private TextBox txtEmail;
-
         // Common Fields
         private Label lblMasterPassword;
         private TextBox txtMasterPassword;
         private Label lblTargetGroup;
         private TextBox txtTargetGroup;
-        private Label lblCliPath;
-        private TextBox txtCliPath;
-        private Button btnBrowseCli;
 
         private CheckBox chkSaveConfig;
         private Button btnVerify;
@@ -99,7 +91,7 @@ namespace VaultwardenSync
         private void InitializeComponent()
         {
             this.Text = "Vaultwarden Sync Options";
-            this.Size = new Size(500, 640);
+            this.Size = new Size(500, 575);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
@@ -110,7 +102,7 @@ namespace VaultwardenSync
             // Source: live from the server, or an encrypted snapshot file
             lblSource = new Label { Text = "Source:", Location = new Point(15, currentY + 3), Size = new Size(120, 20) };
             cmbSource = new ComboBox { Location = new Point(140, currentY), Size = new Size(320, 21), DropDownStyle = ComboBoxStyle.DropDownList };
-            cmbSource.Items.Add("Live from the server (Bitwarden CLI)");
+            cmbSource.Items.Add("Live from the server (API key)");
             cmbSource.Items.Add("Encrypted snapshot file (backup)");
             cmbSource.SelectedIndexChanged += CmbSource_SelectedIndexChanged;
             this.Controls.Add(lblSource);
@@ -148,32 +140,19 @@ namespace VaultwardenSync
 
             currentY += 30;
 
-            // Auth Tab Control
-            tabAuth = new TabControl { Location = new Point(15, currentY), Size = new Size(445, 120) };
-            
-            // Tab 1: API Keys
-            tabApiKey = new TabPage { Text = "API Keys", Padding = new Padding(10) };
-            lblClientId = new Label { Text = "Client ID:", Location = new Point(10, 15), Size = new Size(90, 20) };
-            txtClientId = new TextBox { Location = new Point(110, 15), Size = new Size(300, 20) };
-            lblClientSecret = new Label { Text = "Client Secret:", Location = new Point(10, 45), Size = new Size(90, 20) };
-            txtClientSecret = new TextBox { Location = new Point(110, 45), Size = new Size(300, 20), PasswordChar = '*' };
-            tabApiKey.Controls.Add(lblClientId);
-            tabApiKey.Controls.Add(txtClientId);
-            tabApiKey.Controls.Add(lblClientSecret);
-            tabApiKey.Controls.Add(txtClientSecret);
-            
-            // Tab 2: Credentials
-            tabEmailPass = new TabPage { Text = "Email Credentials", Padding = new Padding(10) };
-            lblEmail = new Label { Text = "Email Address:", Location = new Point(10, 30), Size = new Size(90, 20) };
-            txtEmail = new TextBox { Location = new Point(110, 30), Size = new Size(300, 20) };
-            tabEmailPass.Controls.Add(lblEmail);
-            tabEmailPass.Controls.Add(txtEmail);
+            // API key (web vault: Settings > Security > Keys > View API key)
+            grpApiKey = new GroupBox { Text = "API key", Location = new Point(15, currentY), Size = new Size(445, 85) };
+            lblClientId = new Label { Text = "Client ID:", Location = new Point(10, 24), Size = new Size(110, 20) };
+            txtClientId = new TextBox { Location = new Point(125, 21), Size = new Size(305, 20) };
+            lblClientSecret = new Label { Text = "Client Secret:", Location = new Point(10, 54), Size = new Size(110, 20) };
+            txtClientSecret = new TextBox { Location = new Point(125, 51), Size = new Size(305, 20), PasswordChar = '*' };
+            grpApiKey.Controls.Add(lblClientId);
+            grpApiKey.Controls.Add(txtClientId);
+            grpApiKey.Controls.Add(lblClientSecret);
+            grpApiKey.Controls.Add(txtClientSecret);
+            this.Controls.Add(grpApiKey);
 
-            tabAuth.TabPages.Add(tabApiKey);
-            tabAuth.TabPages.Add(tabEmailPass);
-            this.Controls.Add(tabAuth);
-
-            currentY += 130;
+            currentY += 95;
 
             // Master Password (required for decrypting the vault local cache regardless of auth method)
             lblMasterPassword = new Label { Text = "Master Password:", Location = new Point(15, currentY), Size = new Size(120, 20) };
@@ -188,17 +167,6 @@ namespace VaultwardenSync
             txtTargetGroup = new TextBox { Location = new Point(140, currentY), Size = new Size(320, 20) };
             this.Controls.Add(lblTargetGroup);
             this.Controls.Add(txtTargetGroup);
-
-            currentY += 30;
-
-            // CLI Path
-            lblCliPath = new Label { Text = "Bitwarden CLI Path:", Location = new Point(15, currentY), Size = new Size(120, 20) };
-            txtCliPath = new TextBox { Location = new Point(140, currentY), Size = new Size(235, 20) };
-            btnBrowseCli = new Button { Text = "Browse...", Location = new Point(380, currentY - 2), Size = new Size(80, 24) };
-            btnBrowseCli.Click += BtnBrowseCli_Click;
-            this.Controls.Add(lblCliPath);
-            this.Controls.Add(txtCliPath);
-            this.Controls.Add(btnBrowseCli);
 
             currentY += 35;
 
@@ -243,23 +211,11 @@ namespace VaultwardenSync
             txtServerUrl.Text = _config.ServerUrl;
             txtClientId.Text = _config.ClientId;
             txtClientSecret.Text = _config.ClientSecret;
-            txtEmail.Text = _config.Email;
             txtTargetGroup.Text = _config.TargetGroupName;
-            txtCliPath.Text = _config.CliPath;
             txtSnapshotPath.Text = _config.SnapshotPath;
 
             cmbSource.SelectedIndex = (_startWithSnapshot || _config.UseSnapshot) ? 1 : 0;
             ApplySourceMode();
-
-            // Default to whichever config has content
-            if (string.IsNullOrEmpty(_config.ClientId) && !string.IsNullOrEmpty(_config.Email))
-            {
-                tabAuth.SelectedTab = tabEmailPass;
-            }
-            else
-            {
-                tabAuth.SelectedTab = tabApiKey;
-            }
         }
 
         private void CmbSource_SelectedIndexChanged(object sender, EventArgs e)
@@ -274,10 +230,7 @@ namespace VaultwardenSync
 
             lblServerUrl.Visible = live;
             txtServerUrl.Visible = live;
-            tabAuth.Visible = live;
-            lblCliPath.Visible = live;
-            txtCliPath.Visible = live;
-            btnBrowseCli.Visible = live;
+            grpApiKey.Visible = live;
             pnlSnapshot.Visible = _snapshotMode;
             btnVerify.Visible = _snapshotMode;
 
@@ -398,20 +351,8 @@ namespace VaultwardenSync
             if (!_snapshotMode)
             {
                 _config.ServerUrl = txtServerUrl.Text.Trim();
-                _config.CliPath = txtCliPath.Text.Trim();
-
-                if (tabAuth.SelectedTab == tabApiKey)
-                {
-                    _config.ClientId = txtClientId.Text.Trim();
-                    _config.ClientSecret = txtClientSecret.Text;
-                    _config.Email = string.Empty; // Wipe email to avoid confusion
-                }
-                else
-                {
-                    _config.Email = txtEmail.Text.Trim();
-                    _config.ClientId = string.Empty; // Wipe API keys to avoid confusion
-                    _config.ClientSecret = string.Empty;
-                }
+                _config.ClientId = txtClientId.Text.Trim();
+                _config.ClientSecret = txtClientSecret.Text;
             }
 
             if (chkSaveConfig.Checked)
@@ -419,20 +360,6 @@ namespace VaultwardenSync
                 if (_config.Save())
                 {
                     DatabaseModified = true;
-                }
-            }
-        }
-
-        private void BtnBrowseCli_Click(object sender, EventArgs e)
-        {
-            using (var openFileDialog = new OpenFileDialog())
-            {
-                openFileDialog.Filter = "Executable Files (*.exe)|*.exe|All Files (*.*)|*.*";
-                openFileDialog.Title = "Select Bitwarden CLI Executable (bw.exe)";
-                
-                if (openFileDialog.ShowDialog() == DialogResult.OK)
-                {
-                    txtCliPath.Text = openFileDialog.FileName;
                 }
             }
         }
@@ -470,25 +397,14 @@ namespace VaultwardenSync
             {
                 if (!SyncConfiguration.IsValidServerUrl(txtServerUrl.Text.Trim()))
                 {
-                    MessageBox.Show("Please enter the Vaultwarden Server URL as a full address, e.g. https://vault.example.com.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show("Please enter the Vaultwarden Server URL as a full https:// address, e.g. https://vault.example.com.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
 
-                if (tabAuth.SelectedTab == tabApiKey)
+                if (string.IsNullOrEmpty(txtClientId.Text.Trim()) || string.IsNullOrEmpty(txtClientSecret.Text))
                 {
-                    if (string.IsNullOrEmpty(txtClientId.Text) || string.IsNullOrEmpty(txtClientSecret.Text))
-                    {
-                        MessageBox.Show("Please enter both API Client ID and Client Secret.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
-                    }
-                }
-                else
-                {
-                    if (!SyncConfiguration.IsValidEmail(txtEmail.Text.Trim()))
-                    {
-                        MessageBox.Show("Please enter a valid Vaultwarden Email address.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
-                    }
+                    MessageBox.Show("Please enter both API Client ID and Client Secret.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
                 }
             }
 
@@ -522,10 +438,16 @@ namespace VaultwardenSync
             _engine.OnLogMessage += PostLog;
 
             _snapshotSource = null;
+            _liveSource = null;
             if (_snapshotMode)
             {
                 _snapshotSource = new SnapshotSource(txtSnapshotPath.Text);
                 _snapshotSource.OnLogMessage += PostLog;
+            }
+            else
+            {
+                _liveSource = new LiveSource(_config.ServerUrl, _config.ClientId, _config.ClientSecret, _config.DeviceId);
+                _liveSource.OnLogMessage += PostLog;
             }
 
             // Disable UI during sync and keep the dialog open until it has finished
@@ -562,15 +484,14 @@ namespace VaultwardenSync
 
         private void Worker_DoWork(object sender, DoWorkEventArgs e)
         {
-            // Background thread: only the slow work (Bitwarden CLI calls or decrypting the
-            // snapshot) runs here. The KeePass database is not touched.
+            // Background thread: only the slow work (download and decryption) runs here. The KeePass database is not touched.
             if (_snapshotSource != null)
             {
                 e.Result = _snapshotSource.Decrypt(_syncPassword);
             }
             else
             {
-                e.Result = _engine.FetchVaultData(_syncPassword);
+                e.Result = _liveSource.Fetch(_syncPassword);
             }
         }
 
@@ -661,6 +582,7 @@ namespace VaultwardenSync
 
             _engine = null;
             _snapshotSource = null;
+            _liveSource = null;
             _busy = false;
             ToggleUi(true);
 
@@ -796,11 +718,9 @@ namespace VaultwardenSync
             cmbSource.Enabled = enabled;
             pnlSnapshot.Enabled = enabled;
             txtServerUrl.Enabled = enabled;
-            tabAuth.Enabled = enabled;
+            grpApiKey.Enabled = enabled;
             txtMasterPassword.Enabled = enabled;
             txtTargetGroup.Enabled = enabled;
-            txtCliPath.Enabled = enabled;
-            btnBrowseCli.Enabled = enabled;
             chkSaveConfig.Enabled = enabled;
             btnSync.Enabled = enabled;
             btnVerify.Enabled = enabled;

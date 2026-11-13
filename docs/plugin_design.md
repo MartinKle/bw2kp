@@ -1,5 +1,7 @@
 # Design Plan: KeePass Vaultwarden One-Way Sync Plugin
 
+> **Status (v0.7.0):** This is the original design document. The plugin started with approach B (Bitwarden CLI). Since v0.7.0 it uses approach A: it downloads the encrypted vault with the API key and decrypts it in C# (`src/LiveSource.cs`, `src/SnapshotSource.cs`, `src/VaultCrypto.cs`). The CLI is no longer used. See the README for the current behaviour.
+
 This document outlines the design, architecture, and implementation strategies for a KeePass 2.x plugin that enables one-way synchronization of passwords from a self-hosted **Vaultwarden** (Bitwarden-compatible) vault to a **KeePass** database (`.kdbx`).
 
 ---

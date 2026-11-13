@@ -11,17 +11,18 @@ namespace VaultwardenSync
         private readonly PwDatabase _database;
 
         public const string ConfigEntryTitle = "Vaultwarden Sync Configuration";
-        private const string CliPathConfigKey = "VaultwardenSync.CliPath";
+        private const string DeviceIdConfigKey = "VaultwardenSync.DeviceId";
         private const string SnapshotPathConfigKey = "VaultwardenSync.SnapshotPath";
         private const string SourceConfigKey = "VaultwardenSync.Source";
         private const string SourceSnapshot = "snapshot";
 
         public string ServerUrl { get; set; }
-        public string Email { get; set; }
         public string ClientId { get; set; }
         public string ClientSecret { get; set; }
         public string TargetGroupName { get; set; }
-        public string CliPath { get; set; }
+
+        /// <summary>Identifies this installation towards the server. Local to this computer.</summary>
+        public string DeviceId { get; set; }
 
         /// <summary>Snapshot file, or the backup folder (its newest snapshot is used). Local to this computer.</summary>
         public string SnapshotPath { get; set; }
@@ -38,11 +39,10 @@ namespace VaultwardenSync
 
             // Initialize default values
             ServerUrl = "https://vault.bitwarden.com";
-            Email = string.Empty;
             ClientId = string.Empty;
             ClientSecret = string.Empty;
             TargetGroupName = "Vaultwarden Sync";
-            CliPath = "bw.exe";
+            DeviceId = string.Empty;
             SnapshotPath = System.IO.Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "VaultwardenBackups");
             UseSnapshot = false;
@@ -71,20 +71,17 @@ namespace VaultwardenSync
             return null;
         }
 
+        /// <summary>
+        /// The server must be reached over https. Plain http is only accepted for this
+        /// computer itself (localhost), where nothing travels over a network.
+        /// </summary>
         public static bool IsValidServerUrl(string url)
         {
             Uri uri;
             if (string.IsNullOrEmpty(url)) return false;
             if (!Uri.TryCreate(url, UriKind.Absolute, out uri)) return false;
-            return uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp;
-        }
-
-        public static bool IsValidEmail(string email)
-        {
-            if (string.IsNullOrEmpty(email)) return false;
-            // A leading dash would be read as a command line option by the CLI
-            if (email.StartsWith("-")) return false;
-            return email.IndexOf('@') > 0 && email.IndexOf(' ') < 0;
+            if (uri.Scheme == Uri.UriSchemeHttps) return true;
+            return uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback;
         }
 
         public void Load()
@@ -93,16 +90,18 @@ namespace VaultwardenSync
             if (entry != null)
             {
                 ServerUrl = ReadString(entry, "ServerUrl", ServerUrl);
-                Email = ReadString(entry, "Email", Email);
                 ClientId = ReadString(entry, "ClientId", ClientId);
                 ClientSecret = ReadString(entry, "ClientSecret", ClientSecret);
                 TargetGroupName = ReadString(entry, "TargetGroupName", TargetGroupName);
             }
 
-            // The CLI path is machine-specific and decides which executable receives the
-            // master password. It is therefore kept in the local KeePass configuration and
-            // deliberately not read from the database, which may come from somewhere else.
-            CliPath = _host.CustomConfig.GetString(CliPathConfigKey, CliPath);
+            // Settings of this computer are kept in the local KeePass configuration
+            DeviceId = _host.CustomConfig.GetString(DeviceIdConfigKey, string.Empty);
+            if (string.IsNullOrEmpty(DeviceId))
+            {
+                DeviceId = Guid.NewGuid().ToString();
+                _host.CustomConfig.SetString(DeviceIdConfigKey, DeviceId);
+            }
             SnapshotPath = _host.CustomConfig.GetString(SnapshotPathConfigKey, SnapshotPath);
             UseSnapshot = (_host.CustomConfig.GetString(SourceConfigKey, string.Empty) == SourceSnapshot);
         }
@@ -112,7 +111,6 @@ namespace VaultwardenSync
         /// </summary>
         public bool Save()
         {
-            _host.CustomConfig.SetString(CliPathConfigKey, CliPath ?? string.Empty);
             _host.CustomConfig.SetString(SnapshotPathConfigKey, SnapshotPath ?? string.Empty);
             _host.CustomConfig.SetString(SourceConfigKey, UseSnapshot ? SourceSnapshot : "live");
 
@@ -129,16 +127,18 @@ namespace VaultwardenSync
             }
 
             changed |= WriteString(entry, "ServerUrl", ServerUrl, false);
-            changed |= WriteString(entry, "Email", Email, false);
             changed |= WriteString(entry, "ClientId", ClientId, false);
             changed |= WriteString(entry, "ClientSecret", ClientSecret, true);
             changed |= WriteString(entry, "TargetGroupName", TargetGroupName, false);
 
-            // Older versions stored the CLI path in the database
-            if (entry.Strings.Get("CliPath") != null)
+            // Settings of older versions that are no longer used
+            foreach (string oldName in new string[] { "CliPath", "Email" })
             {
-                entry.Strings.Remove("CliPath");
-                changed = true;
+                if (entry.Strings.Get(oldName) != null)
+                {
+                    entry.Strings.Remove(oldName);
+                    changed = true;
+                }
             }
 
             if (changed)

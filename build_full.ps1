@@ -48,6 +48,7 @@ $sourceFiles = @(
     "$srcDir\SyncEngine.cs",
     "$srcDir\VaultCrypto.cs",
     "$srcDir\SnapshotSource.cs",
+    "$srcDir\LiveSource.cs",
     "$srcDir\SyncDialog.cs"
 )
 

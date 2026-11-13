@@ -3,30 +3,28 @@
 A lightweight KeePass 2.x plugin that enables one-way synchronization from Vaultwarden (or Bitwarden) directly into your KeePass database.
 
 ## Features
-- **One-Way Sync:** Automatically pulls logins and secure notes from Vaultwarden into a designated KeePass folder.
-- **Native Encryption:** Stores your Vaultwarden API secrets securely as native KeePass `ProtectedString` objects inside your database.
-- **Organization Segregation:** Items belonging to an organization are automatically placed in `Target Group -> [Organization Name]`.
-- **Folder Preservation:** Preserves personal folder hierarchies.
-- **Background Sync:** Performs network and decryption processes in the background to prevent the KeePass UI from freezing.
-- **Auto-Save:** Automatically saves your KeePass database after a successful sync.
-- **Zero Heavy Dependencies:** Written in C# 5 targeting .NET Framework 4.8. Uses native `DataContractJsonSerializer` instead of bulky 3rd party libraries, keeping the plugin size at just ~32 KB.
+- **One-way sync:** pulls logins and secure notes from Vaultwarden into a KeePass group. Organizations become sub-groups, folders keep their hierarchy.
+- **Scheduled encrypted backup:** a PowerShell script saves an encrypted snapshot of the vault with only the API key. It can run as a Windows task and tells you when it fails.
+- **No Bitwarden CLI:** the plugin talks to the server and decrypts the vault itself (PBKDF2 and Argon2id accounts).
+- **Careful merge:** only real changes are written, old values go to the entry history, removed items go to the Recycle Bin, your own fields are kept.
+- **Preview:** an import shows what would change before anything is written.
+- **Small:** C# 5 for .NET Framework 4.8, no third-party libraries. Built and tested automatically on every change.
 
 ## Two ways to get your vault into KeePass
 
-| | Live sync | Snapshot (two stages) |
+| | Snapshot (two stages) | Live sync |
 |---|---|---|
-| Needs the Bitwarden CLI | yes | **no** |
-| Needs the master password | at every sync | **only when importing** |
-| Backup runs unattended | no | **yes, as a scheduled task** |
-| Menu entry | Tools > Sync with Vaultwarden... | Tools > Import Vaultwarden snapshot... |
+| Needs the master password | **only when importing** | at every sync |
+| Backup runs unattended | **yes, as a scheduled task** | no |
+| Works without the server | **yes, once a snapshot exists** | no |
+| Menu entry | Tools > Import Vaultwarden snapshot... | Tools > Sync with Vaultwarden... |
 
-The snapshot way is recommended: a small PowerShell script downloads an **encrypted** copy of the vault with only the API key (stage 1), and the plugin decrypts it locally when you want it in KeePass (stage 2). Both ways use the same merge rules.
+The snapshot way is recommended: a small PowerShell script downloads an **encrypted** copy of the vault with only the API key (stage 1), and the plugin decrypts it locally when you want it in KeePass (stage 2). The live sync does both steps at once inside KeePass. Both use the same decryption and the same merge rules, and neither needs the Bitwarden CLI.
 
 ## Requirements
-1. **Windows** with **KeePass 2.x** and .NET Framework 4.8 (standard on modern Windows).
-2. **Snapshot way:** nothing else. Windows PowerShell 5.1 is preinstalled.
-3. **Live sync only:** Bitwarden CLI (`winget install Bitwarden.CLI`).
-4. Accounts with **PBKDF2-SHA256** or **Argon2id** are supported (Argon2id needs KeePass 2.49 or newer).
+1. **Windows** with **KeePass 2.x** and .NET Framework 4.8 (standard on modern Windows). Windows PowerShell 5.1 for the backup script is preinstalled.
+2. A personal **API key** of your account (web vault: **Settings > Security > Keys > View API key**).
+3. Accounts with **PBKDF2-SHA256** or **Argon2id** are supported (Argon2id needs KeePass 2.49 or newer).
 
 ## Installation
 
@@ -71,11 +69,12 @@ Items land in the target group, folders keep their hierarchy, and organization i
 
 ## Live sync (optional)
 1. Go to **Tools > Sync with Vaultwarden...** and fill in the dialog:
-   - **Server URL** and **Authentication** (API Keys recommended, especially with 2FA, or Email/Password).
-   - **Master Password** (memory only), **Target Group** and the **Bitwarden CLI Path** (`bw.exe`).
+   - **Server URL** (must be `https://`; plain `http://` is only accepted for `localhost`).
+   - **API key:** Client ID and Client Secret from the web vault.
+   - **Master Password** (kept in memory only) and **Target Group**.
 2. Leave **Remember Configuration settings** checked to store the settings in the database, then click **Synchronize**.
 
-The sync runs in the background and the KeePass tree updates when it is done.
+The plugin logs in with the API key, downloads the encrypted vault and decrypts it on your computer. The sync runs in the background and the KeePass tree updates when it is done. Logging in with e-mail and password is no longer offered; the API key also works with two-step login.
 
 ## Rescue path without KeePass
 `tools\decrypt_snapshot.py` decrypts a snapshot in Python (`pip install cryptography`, optional `argon2-cffi`):
@@ -92,13 +91,9 @@ python tools\decrypt_snapshot.py <snapshot file or folder> --out vault.json
 - **Not synced into KeePass:** cards, identities, SSH keys, passkeys, attachments and additional URIs. KeePass gets a readable copy. The encrypted snapshot is the fuller backup (everything the server's sync returns, except attachments).
 
 ## How the live sync stores its configuration
-The plugin stores your settings in the root of your KeePass database under an entry titled **Vaultwarden Sync Configuration**. Your `ClientSecret` is protected natively by KeePass database encryption. Because these settings are stored directly in your `.kdbx` file, they will travel with your database across machines!
+Server URL, API key and target group are stored in the root of your KeePass database in an entry titled **Vaultwarden Sync Configuration**. The client secret is a protected field, so it is encrypted with the database and travels with it. The master password is never stored.
 
-The **Bitwarden CLI path** is the exception: it is stored in the local KeePass configuration of each computer, because it decides which program receives your master password.
-
-The plugin runs the Bitwarden CLI with its own profile in `%APPDATA%\VaultwardenSync\bw-cli` and logs out again after every sync. Your own `bw` login and server setting are not touched.
-
-If you log in with Email/Password and your account uses two-step login, the sync stops with an error instead of waiting for a code. Use API Keys in that case.
+The snapshot folder and a random device identifier are stored in the local KeePass configuration of each computer.
 
 ## Compiling from Source
 Needs only the .NET Framework compiler (`csc.exe`) that ships with Windows.
@@ -119,6 +114,7 @@ python tests\test_reference.py     # Python reference decryptor
 This project is licensed under the GNU General Public License v3.0 (GPLv3). See the [LICENSE](LICENSE) file for details.
 
 ## Version History
+- **v0.7.0**: The live sync no longer needs the Bitwarden CLI: the plugin downloads the vault with the API key and decrypts it itself (login with e-mail and password was removed; the server must use https). The backup script shows a Windows notification when a backup fails.
 - **v0.6.0**: Argon2id accounts can be imported; snapshots are kept by day, week and month, and nothing is deleted when the vault suddenly shrank; the import dialog shows the age of the newest snapshot; the Python tool asks before writing plain text; automated tests and CI.
 - **v0.5.0**: Import shows a summary and asks before writing; "Check only" mode; warnings for old snapshots and mass removals; a target group is bound to one account; the backup warns about a backup folder that other users can read; security notes extended.
 - **v0.4.1**: Hardening after the security review: the backup reads the account e-mail from the profile (an identity item could be picked up before), no HTTP redirects are followed, values without MAC are rejected under keys that have one, and the PBKDF2 iteration count of a snapshot must be plausible.
