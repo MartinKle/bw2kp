@@ -55,4 +55,3 @@ One UTF-8 JSON file. `prelogin` and `sync` are the unmodified server responses.
 - The snapshot contains no plaintext secrets, but anyone who gets the file can try to guess the master password offline. A strong master password (and the Argon2id KDF) is what protects the backup, so keep the folder private.
 - The API secret gives access to the account, protect the Windows profile accordingly. It can be rotated in the web vault (View API key > Rotate API key); then run `-Setup` again.
 - Not included: file attachments, Sends and the vault's recycle-bin contents beyond what `/api/sync` returns.
-- The script was written without access to a Windows machine or a Vaultwarden server and has **not been run yet**. Try it once by hand, then check that `backup.log` and the snapshot look right.
