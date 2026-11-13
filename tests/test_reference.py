@@ -64,6 +64,9 @@ def build_snapshot(password, email, iterations=5000):
         return c
 
     ciphers = [
+        # An identity comes first on purpose: it has an (encrypted) "email" field ahead of the
+        # profile, which the backup script must not mistake for the account address.
+        cipher("c-identity", 4, "Me", user_key, identity={"email": enc2s("me@example.com", user_key)}),
         cipher("c-plain", 1, "Plain login", user_key, folderId="f1",
                notes=enc2s("a note\nwith umlauts äöü", user_key),
                login={"username": enc2s("alice", user_key), "password": enc2s("p@ss €", user_key),
@@ -90,7 +93,7 @@ def build_snapshot(password, email, iterations=5000):
         "server": "https://vault.example", "email": email,
         "prelogin": {"kdf": 0, "kdfIterations": iterations, "kdfMemory": None, "kdfParallelism": None},
         "sync": {
-            "profile": {"email": email, "key": enc2(user_key, stretched), "privateKey": enc2(pkcs8, user_key),
+            "profile": {"id": "11111111-2222-3333-4444-555555555555", "email": email, "key": enc2(user_key, stretched), "privateKey": enc2(pkcs8, user_key),
                         "organizations": [{"id": "o1", "name": "Family", "key": org_key_enc, "status": 2},
                                           {"id": "o2", "name": "Invited only", "key": org_key_enc, "status": 0}]},
             "userDecryption": {"masterPasswordUnlock": {
@@ -222,7 +225,7 @@ def test_roundtrip_and_all_item_kinds():
     snap, _ = build_snapshot("correct horse", "Alice@Example.com")
     vault, orgs = ref.decrypt_snapshot(snap, "correct horse")
     items = {i["id"]: i for i in vault["items"]}
-    assert set(items) == {"c-plain", "c-itemkey", "c-org", "c-org-itemkey", "c-card"}  # trash is dropped
+    assert set(items) == {"c-identity", "c-plain", "c-itemkey", "c-org", "c-org-itemkey", "c-card"}  # trash is dropped
     assert items["c-plain"]["name"] == "Plain login"
     assert items["c-plain"]["notes"] == "a note\nwith umlauts äöü"
     assert items["c-plain"]["login"]["password"] == "p@ss €"
@@ -248,7 +251,7 @@ def test_wrong_password_is_reported():
 
 def test_damaged_data_is_detected():
     snap, _ = build_snapshot("pw", "alice@example.com")
-    c = snap["sync"]["ciphers"][0]
+    c = snap["sync"]["ciphers"][1]
     iv, ct, mac = c["name"][2:].split("|")
     raw = bytearray(base64.b64decode(ct)); raw[0] ^= 1
     c["name"] = "2.%s|%s|%s" % (iv, b64(bytes(raw)), mac)
@@ -263,7 +266,7 @@ def test_damaged_data_is_detected():
 def test_value_without_mac_is_rejected():
     # A modified snapshot must not be able to switch a value to type 0 (no MAC)
     snap, _ = build_snapshot("pw", "alice@example.com")
-    c = snap["sync"]["ciphers"][0]
+    c = snap["sync"]["ciphers"][1]
     iv, ct, _mac = c["name"][2:].split("|")
     c["name"] = "0.%s|%s" % (iv, ct)
     try:

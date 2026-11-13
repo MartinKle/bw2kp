@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check cryptography
+          choco install keepass -y --no-progress
+
+      - name: Python reference tests
+        run: python tests/test_reference.py
+
+      - name: Check the PowerShell scripts
+        shell: powershell
+        run: |
+          $files = @(Get-ChildItem -Recurse -Include *.ps1 -Path backup, tests) + (Get-Item build_full.ps1)
+          $bad = 0
+          foreach ($f in $files) {
+            $tokens = $null; $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            foreach ($e in $errors) { Write-Host "$($f.Name):$($e.Extent.StartLineNumber): $($e.Message)"; $bad++ }
+            if ((Get-Content -LiteralPath $f.FullName -Raw) -match '[^\x00-\x7F]') { Write-Host "$($f.Name): contains non-ASCII characters"; $bad++ }
+          }
+          if (Get-Module -ListAvailable PSScriptAnalyzer) {
+            $findings = @($files | ForEach-Object { Invoke-ScriptAnalyzer -Path $_.FullName -Severity Error -ExcludeRule PSAvoidUsingConvertToSecureStringWithPlainText })
+            $findings | Format-Table -AutoSize | Out-String | Write-Host
+            $bad += $findings.Count
+          }
+          if ($bad -gt 0) { exit 1 }
+
+      - name: Build the plugin
+        shell: powershell
+        run: .\build_full.ps1
+
+      - name: C# tests and complete backup-to-import run
+        shell: powershell
+        run: .\tests\Run-Tests.ps1
+
+      - name: Checksum
+        shell: powershell
+        run: (Get-FileHash VaultwardenSync.dll -Algorithm SHA256).Hash + '  VaultwardenSync.dll' | Set-Content VaultwardenSync.dll.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VaultwardenSync
+          path: |
+            VaultwardenSync.dll
+            VaultwardenSync.dll.sha256
