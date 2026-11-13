@@ -31,7 +31,7 @@ The snapshot way is recommended: a small PowerShell script downloads an **encryp
 ## Installation
 
 ### 1. Install the KeePass plugin
-1. Build `VaultwardenSync.dll` (see [Compiling from Source](#compiling-from-source)) or take it from `releases/`.
+1. Download `VaultwardenSync.dll` from the [latest release](https://github.com/MartinKle/bw2kp/releases/latest) (built and tested by CI; the release notes show its SHA-256), or build it yourself (see [Compiling from Source](#compiling-from-source)).
 2. Copy it into the KeePass `Plugins` folder (for example `C:\Program Files\KeePass Password Safe 2\Plugins` or `<portable KeePass>\Plugins`).
 3. Restart KeePass. **Tools** now shows *Sync with Vaultwarden...* and *Import Vaultwarden snapshot...*.
 
