@@ -59,6 +59,23 @@ namespace VaultwardenSync
         public VaultData Fetch(string masterPassword)
         {
             if (string.IsNullOrEmpty(masterPassword)) throw new ArgumentException("The master password is empty.", "masterPassword");
+            byte[] passwordUtf8 = Encoding.UTF8.GetBytes(masterPassword);
+            try
+            {
+                return Fetch(passwordUtf8);
+            }
+            finally
+            {
+                Array.Clear(passwordUtf8, 0, passwordUtf8.Length);
+            }
+        }
+
+        /// <summary>
+        /// Same, for a password given as UTF-8 bytes. The caller keeps and clears the bytes.
+        /// </summary>
+        public VaultData Fetch(byte[] masterPassword)
+        {
+            if (masterPassword == null || masterPassword.Length == 0) throw new ArgumentException("The master password is empty.", "masterPassword");
             if (!SyncConfiguration.IsValidServerUrl(_serverUrl))
             {
                 throw new InvalidOperationException("The server URL must be a full https:// address.");

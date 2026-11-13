@@ -155,6 +155,51 @@ namespace VaultwardenSync
             return changed;
         }
 
+        private const string MasterPasswordField = "MasterPassword";
+
+        /// <summary>
+        /// The master password stored in the database (opt-in), or null if none is stored.
+        /// </summary>
+        public ProtectedString LoadMasterPassword()
+        {
+            PwEntry entry = FindConfigEntry();
+            if (entry == null) return null;
+            ProtectedString stored = entry.Strings.Get(MasterPasswordField);
+            if (stored == null || stored.IsEmpty) return null;
+            return stored;
+        }
+
+        /// <summary>
+        /// Stores the master password as a protected field of the configuration entry.
+        /// The entry must exist (Save). Returns true if the database was changed.
+        /// </summary>
+        public bool SaveMasterPassword(ProtectedString password)
+        {
+            if (password == null || password.IsEmpty) return false;
+            PwEntry entry = FindConfigEntry();
+            if (entry == null) return false;
+
+            ProtectedString current = entry.Strings.Get(MasterPasswordField);
+            if (current != null && current.IsProtected && current.Equals(password, false)) return false;
+
+            entry.Strings.Set(MasterPasswordField, password.WithProtection(true));
+            entry.Touch(true, false);
+            return true;
+        }
+
+        /// <summary>
+        /// Removes a stored master password. Returns true if the database was changed.
+        /// </summary>
+        public bool RemoveMasterPassword()
+        {
+            PwEntry entry = FindConfigEntry();
+            if (entry == null || entry.Strings.Get(MasterPasswordField) == null) return false;
+
+            entry.Strings.Remove(MasterPasswordField);
+            entry.Touch(true, false);
+            return true;
+        }
+
         private string ReadString(PwEntry entry, string fieldName, string defaultValue)
         {
             var field = entry.Strings.Get(fieldName);

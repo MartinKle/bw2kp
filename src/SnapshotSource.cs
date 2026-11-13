@@ -326,6 +326,23 @@ namespace VaultwardenSync
         public VaultData Decrypt(string masterPassword)
         {
             if (string.IsNullOrEmpty(masterPassword)) throw new ArgumentException("The master password is empty.", "masterPassword");
+            byte[] passwordUtf8 = System.Text.Encoding.UTF8.GetBytes(masterPassword);
+            try
+            {
+                return Decrypt(passwordUtf8);
+            }
+            finally
+            {
+                Array.Clear(passwordUtf8, 0, passwordUtf8.Length);
+            }
+        }
+
+        /// <summary>
+        /// Same, for a password given as UTF-8 bytes. The caller keeps and clears the bytes.
+        /// </summary>
+        public VaultData Decrypt(byte[] masterPassword)
+        {
+            if (masterPassword == null || masterPassword.Length == 0) throw new ArgumentException("The master password is empty.", "masterPassword");
 
             string file = ResolvePath(_path);
             Log("Reading snapshot: " + file);
@@ -338,13 +355,13 @@ namespace VaultwardenSync
         /// Decrypts vault data that is already in memory: a snapshot that was read from a file,
         /// or the data the live sync has just downloaded.
         /// </summary>
-        public VaultData DecryptDocument(SnapDocument doc, string masterPassword)
+        public VaultData DecryptDocument(SnapDocument doc, byte[] masterPassword)
         {
             if (doc == null || doc.sync == null || doc.sync.profile == null || doc.sync.ciphers == null)
             {
                 throw new InvalidDataException("The vault data is incomplete (no profile or items).");
             }
-            if (string.IsNullOrEmpty(masterPassword)) throw new ArgumentException("The master password is empty.", "masterPassword");
+            if (masterPassword == null || masterPassword.Length == 0) throw new ArgumentException("The master password is empty.", "masterPassword");
 
             SnapProfile profile = doc.sync.profile;
             SnapMasterPasswordUnlock unlock = null;
@@ -536,12 +553,13 @@ namespace VaultwardenSync
         /// Master key of an account that uses Argon2id, computed with the Argon2 implementation
         /// of KeePass. As in Bitwarden, the salt is the SHA-256 hash of the e-mail address.
         /// </summary>
-        public static byte[] DeriveMasterKeyArgon2id(string password, string salt, int iterations, int memoryMiB, int parallelism)
+        public static byte[] DeriveMasterKeyArgon2id(byte[] passwordUtf8, string salt, int iterations, int memoryMiB, int parallelism)
         {
-            if (string.IsNullOrEmpty(password)) throw new ArgumentException("The master password is empty.", "password");
+            if (passwordUtf8 == null || passwordUtf8.Length == 0) throw new ArgumentException("The master password is empty.", "passwordUtf8");
             if (string.IsNullOrEmpty(salt)) throw new ArgumentException("The salt (e-mail address) is empty.", "salt");
 
-            byte[] passwordBytes = System.Text.Encoding.UTF8.GetBytes(password);
+            // Work on a copy: the caller keeps and clears its own bytes
+            byte[] passwordBytes = (byte[])passwordUtf8.Clone();
             try
             {
                 byte[] saltHash;

@@ -95,6 +95,11 @@ Server URL, API key and target group are stored in the root of your KeePass data
 
 The snapshot folder and a random device identifier are stored in the local KeePass configuration of each computer.
 
+### Storing the master password (optional, off by default)
+The dialog has the option **Also store the master password in this database**. If you switch it on, the master password is saved as a protected field of the same entry after the next successful run, and the dialog is filled in for you from then on. Switching it off removes it again.
+
+Think before you use it: anyone who can open the KeePass database can then open your complete Vaultwarden vault, including items that are not copied to KeePass, and together with the stored API key also download it. Your KeePass master key becomes the only key to both. Use it only if that key is at least as strong as your Vaultwarden master password.
+
 ## Compiling from Source
 Needs only the .NET Framework compiler (`csc.exe`) that ships with Windows.
 1. Open PowerShell in the repository folder.
@@ -114,6 +119,7 @@ python tests\test_reference.py     # Python reference decryptor
 This project is licensed under the GNU General Public License v3.0 (GPLv3). See the [LICENSE](LICENSE) file for details.
 
 ## Version History
+- **v0.8.0**: The master password is entered in KeePass' protected password box and handled as bytes that are cleared after use. New option (off by default) to store the master password in the database.
 - **v0.7.0**: The live sync no longer needs the Bitwarden CLI: the plugin downloads the vault with the API key and decrypts it itself (login with e-mail and password was removed; the server must use https). The backup script shows a Windows notification when a backup fails.
 - **v0.6.0**: Argon2id accounts can be imported; snapshots are kept by day, week and month, and nothing is deleted when the vault suddenly shrank; the import dialog shows the age of the newest snapshot; the Python tool asks before writing plain text; automated tests and CI.
 - **v0.5.0**: Import shows a summary and asks before writing; "Check only" mode; warnings for old snapshots and mass removals; a target group is bound to one account; the backup warns about a backup folder that other users can read; security notes extended.

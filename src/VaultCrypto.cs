@@ -101,15 +101,27 @@ namespace VaultwardenSync
             if (iterations < 1) throw new ArgumentException("Invalid number of KDF iterations.", "iterations");
 
             byte[] passwordBytes = Encoding.UTF8.GetBytes(password);
-            byte[] saltBytes = Encoding.UTF8.GetBytes(salt.Trim().ToLowerInvariant());
             try
             {
-                return Pbkdf2Sha256(passwordBytes, saltBytes, iterations, 32);
+                return DeriveMasterKey(passwordBytes, salt, iterations);
             }
             finally
             {
                 Array.Clear(passwordBytes, 0, passwordBytes.Length);
             }
+        }
+
+        /// <summary>
+        /// Same, for a password given as UTF-8 bytes. The caller keeps and clears the bytes.
+        /// </summary>
+        public static byte[] DeriveMasterKey(byte[] passwordUtf8, string salt, int iterations)
+        {
+            if (passwordUtf8 == null || passwordUtf8.Length == 0) throw new ArgumentException("The master password is empty.", "passwordUtf8");
+            if (string.IsNullOrEmpty(salt)) throw new ArgumentException("The salt (e-mail address) is empty.", "salt");
+            if (iterations < 1) throw new ArgumentException("Invalid number of KDF iterations.", "iterations");
+
+            byte[] saltBytes = Encoding.UTF8.GetBytes(salt.Trim().ToLowerInvariant());
+            return Pbkdf2Sha256(passwordUtf8, saltBytes, iterations, 32);
         }
 
         public static SymmetricKey StretchMasterKey(byte[] masterKey)

@@ -5,6 +5,7 @@ using System.Threading;
 using System.Windows.Forms;
 using KeePass.UI;
 using KeePassLib;
+using KeePassLib.Security;
 
 namespace VaultwardenSync
 {
@@ -14,7 +15,11 @@ namespace VaultwardenSync
         private readonly PwDatabase _database;
 
         private BackgroundWorker _worker;
-        private string _syncPassword;
+        // The master password of the current run: as bytes for the key derivation (cleared
+        // afterwards) and as protected string in case it is to be stored in the database.
+        private byte[] _syncPasswordBytes;
+        private ProtectedString _runPassword;
+        private bool _loadingValues;
         private SyncEngine _engine;
         private SnapshotSource _snapshotSource;
         private LiveSource _liveSource;
@@ -59,11 +64,12 @@ namespace VaultwardenSync
 
         // Common Fields
         private Label lblMasterPassword;
-        private TextBox txtMasterPassword;
+        private SecureTextBoxEx txtMasterPassword;
         private Label lblTargetGroup;
         private TextBox txtTargetGroup;
 
         private CheckBox chkSaveConfig;
+        private CheckBox chkStorePassword;
         private Button btnVerify;
         private Button btnSync;
         private Button btnCancel;
@@ -91,7 +97,7 @@ namespace VaultwardenSync
         private void InitializeComponent()
         {
             this.Text = "Vaultwarden Sync Options";
-            this.Size = new Size(500, 575);
+            this.Size = new Size(500, 600);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
@@ -156,7 +162,8 @@ namespace VaultwardenSync
 
             // Master Password (required for decrypting the vault local cache regardless of auth method)
             lblMasterPassword = new Label { Text = "Master Password:", Location = new Point(15, currentY), Size = new Size(120, 20) };
-            txtMasterPassword = new TextBox { Location = new Point(140, currentY), Size = new Size(320, 20), PasswordChar = '*' };
+            // KeePass' own password box: the text is kept encrypted in memory
+            txtMasterPassword = new SecureTextBoxEx { Location = new Point(140, currentY), Size = new Size(320, 20) };
             this.Controls.Add(lblMasterPassword);
             this.Controls.Add(txtMasterPassword);
 
@@ -173,6 +180,14 @@ namespace VaultwardenSync
             // Save Config Checkbox
             chkSaveConfig = new CheckBox { Text = "Remember Configuration settings (Secret is stored encrypted)", Location = new Point(15, currentY), Size = new Size(400, 20), Checked = true };
             this.Controls.Add(chkSaveConfig);
+
+            currentY += 24;
+
+            // Opt-in: keep the master password in the database, so that it need not be typed
+            chkStorePassword = new CheckBox { Text = "Also store the master password in this database (off by default)", Location = new Point(32, currentY), Size = new Size(420, 20), Checked = false };
+            chkStorePassword.CheckedChanged += ChkStorePassword_CheckedChanged;
+            chkSaveConfig.CheckedChanged += delegate { chkStorePassword.Enabled = chkSaveConfig.Checked; };
+            this.Controls.Add(chkStorePassword);
 
             currentY += 30;
 
@@ -212,6 +227,16 @@ namespace VaultwardenSync
             txtClientId.Text = _config.ClientId;
             txtClientSecret.Text = _config.ClientSecret;
             txtTargetGroup.Text = _config.TargetGroupName;
+
+            // A master password is only prefilled if the user chose to store it
+            _loadingValues = true;
+            ProtectedString storedPassword = _config.LoadMasterPassword();
+            if (storedPassword != null)
+            {
+                txtMasterPassword.TextEx = storedPassword;
+                chkStorePassword.Checked = true;
+            }
+            _loadingValues = false;
             txtSnapshotPath.Text = _config.SnapshotPath;
 
             cmbSource.SelectedIndex = (_startWithSnapshot || _config.UseSnapshot) ? 1 : 0;
@@ -236,6 +261,29 @@ namespace VaultwardenSync
 
             btnSync.Text = _snapshotMode ? "Import" : "Synchronize";
             this.Text = _snapshotMode ? "Import Vaultwarden Snapshot" : "Vaultwarden Sync Options";
+        }
+
+        private bool WantsStoredPassword
+        {
+            get { return chkSaveConfig.Checked && chkStorePassword.Checked; }
+        }
+
+        private void ChkStorePassword_CheckedChanged(object sender, EventArgs e)
+        {
+            if (_loadingValues || !chkStorePassword.Checked) return;
+
+            DialogResult answer = MessageBox.Show(
+                "The Vaultwarden master password will be stored in this KeePass database, as a protected field of the entry \"Vaultwarden Sync Configuration\".\n\n" +
+                "Anyone who can open this database will then also be able to open your complete Vaultwarden vault, including items that are not copied to KeePass.\n\n" +
+                "It is stored after the next successful run. Store the master password?",
+                "Store Master Password",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+            if (answer != DialogResult.Yes)
+            {
+                _loadingValues = true;
+                chkStorePassword.Checked = false;
+                _loadingValues = false;
+            }
         }
 
         /// <summary>
@@ -362,6 +410,13 @@ namespace VaultwardenSync
                     DatabaseModified = true;
                 }
             }
+
+            // A stored master password is removed as soon as the option is switched off.
+            // It is (re)written only after a successful run, so a mistyped one is never stored.
+            if (!WantsStoredPassword && _config.RemoveMasterPassword())
+            {
+                DatabaseModified = true;
+            }
         }
 
         private void BtnSync_Click(object sender, EventArgs e)
@@ -408,7 +463,7 @@ namespace VaultwardenSync
                 }
             }
 
-            if (string.IsNullOrEmpty(txtMasterPassword.Text))
+            if (txtMasterPassword.TextLength == 0)
             {
                 MessageBox.Show("Please enter your Vaultwarden Master Password to decrypt your vault.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
@@ -432,7 +487,8 @@ namespace VaultwardenSync
             }
 
             // Store password for the background worker to access
-            _syncPassword = txtMasterPassword.Text;
+            _runPassword = txtMasterPassword.TextEx;
+            _syncPasswordBytes = _runPassword.ReadUtf8();
 
             _engine = new SyncEngine(_config, _database);
             _engine.OnLogMessage += PostLog;
@@ -487,18 +543,24 @@ namespace VaultwardenSync
             // Background thread: only the slow work (download and decryption) runs here. The KeePass database is not touched.
             if (_snapshotSource != null)
             {
-                e.Result = _snapshotSource.Decrypt(_syncPassword);
+                e.Result = _snapshotSource.Decrypt(_syncPasswordBytes);
             }
             else
             {
-                e.Result = _liveSource.Fetch(_syncPassword);
+                e.Result = _liveSource.Fetch(_syncPasswordBytes);
             }
         }
 
         private void Worker_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
-            // Clear the stored password
-            _syncPassword = null;
+            // Clear the password of this run
+            if (_syncPasswordBytes != null)
+            {
+                Array.Clear(_syncPasswordBytes, 0, _syncPasswordBytes.Length);
+                _syncPasswordBytes = null;
+            }
+            ProtectedString runPassword = _runPassword;
+            _runPassword = null;
 
             Exception error = e.Error;
             SyncResult result = null;
@@ -603,7 +665,12 @@ namespace VaultwardenSync
             }
 
             SyncSucceeded = true;
-            txtMasterPassword.Clear();
+
+            // The password was right: store it if the user asked for that
+            if (WantsStoredPassword && _config.SaveMasterPassword(runPassword))
+            {
+                DatabaseModified = true;
+            }
 
             MessageBox.Show(
                 string.Format(
@@ -722,6 +789,7 @@ namespace VaultwardenSync
             txtMasterPassword.Enabled = enabled;
             txtTargetGroup.Enabled = enabled;
             chkSaveConfig.Enabled = enabled;
+            chkStorePassword.Enabled = enabled && chkSaveConfig.Checked;
             btnSync.Enabled = enabled;
             btnVerify.Enabled = enabled;
             btnCancel.Enabled = enabled;
