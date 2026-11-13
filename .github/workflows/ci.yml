@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -66,21 +65,29 @@ jobs:
             VaultwardenSync.dll.sha256
 
   release:
-    # A tag like v0.6.0 publishes the tested build as a GitHub release
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Publishes the tested build as a GitHub release when the version in
+    # src/Properties/AssemblyInfo.cs has no release yet.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build-and-test
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: VaultwardenSync
-      - name: Publish the release
+          path: dist
+      - name: Publish the release if the version is new
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" VaultwardenSync.dll VaultwardenSync.dll.sha256 \
-            --repo "$GITHUB_REPOSITORY" --title "$TAG" \
-            --notes "Built and tested by CI from tag $TAG. SHA-256: $(cut -d' ' -f1 VaultwardenSync.dll.sha256)"
+          version=$(grep -oP 'AssemblyVersion\("\K[0-9]+\.[0-9]+\.[0-9]+' src/Properties/AssemblyInfo.cs)
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists."
+            exit 0
+          fi
+          gh release create "$tag" dist/VaultwardenSync.dll dist/VaultwardenSync.dll.sha256 \
+            --target "$GITHUB_SHA" --title "$tag" \
+            --notes "Built and tested by CI from commit $GITHUB_SHA. SHA-256 of VaultwardenSync.dll: $(cut -d' ' -f1 dist/VaultwardenSync.dll.sha256)"
